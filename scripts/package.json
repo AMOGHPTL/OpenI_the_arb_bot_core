@@ -1,0 +1,18 @@
+{
+    "name": "flashloan-arb-bot",
+    "version": "1.0.0",
+    "description": "Flash Loan Arbitrage Bot using Morpho",
+    "main": "executionEngine.js",
+    "scripts": {
+        "start": "node executionEngine.js",
+        "monitor": "node priceMonitor.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "ethers": "^6.8.0",
+        "dotenv": "^16.3.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0"
+    }
+}

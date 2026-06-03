@@ -1,0 +1,21 @@
+# Foundry
+cache/
+out/
+deployments/
+broadcast/
+
+# Environment
+.env
+.env.local
+
+# Node.js (if you have scripts)
+scripts/node_modules/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
