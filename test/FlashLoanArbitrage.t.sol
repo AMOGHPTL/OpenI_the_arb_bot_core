@@ -45,7 +45,7 @@ contract FlashLoanArbitrageTest is Test {
         weth.mint(address(uni), 1_000_000 ether);
     }
 
-    function testDeployment() public {
+    function testDeployment() public view {
         assertEq(address(arbitrage.MORPHO()), address(morpho));
 
         assertEq(address(arbitrage.UNISWAP_ROUTER()), address(uni));
@@ -53,11 +53,11 @@ contract FlashLoanArbitrageTest is Test {
         assertEq(address(arbitrage.SUSHI_ROUTER()), address(sushi));
     }
 
-    function testOwner() public {
+    function testOwner() public view {
         assertEq(arbitrage.owner(), owner);
     }
 
-    function testGetBalance() public {
+    function testGetBalance() public view {
         assertEq(arbitrage.getBalance(address(usdc)), 0);
     }
 
@@ -78,13 +78,13 @@ contract FlashLoanArbitrageTest is Test {
     }
 
     function testInitiateFlashLoanRevertsZeroAmount() public {
-        vm.expectRevert("Amount must be > 0");
+        vm.expectRevert(FlashLoanArbitrage.ZeroAmount.selector);
 
         arbitrage.initiateFlashLoan(address(usdc), 0, address(weth), 3000, 0, 0, 1, 1, block.timestamp + 1 hours);
     }
 
     function testInitiateFlashLoanRevertsSameToken() public {
-        vm.expectRevert("Tokens must differ");
+        vm.expectRevert(FlashLoanArbitrage.SameToken.selector);
 
         arbitrage.initiateFlashLoan(address(usdc), 100e6, address(usdc), 3000, 0, 0, 1, 1, block.timestamp + 1 hours);
     }
@@ -102,9 +102,9 @@ contract FlashLoanArbitrageTest is Test {
 
         vm.prank(user);
 
-        vm.expectRevert("Only Morpho can callback");
+        vm.expectRevert(FlashLoanArbitrage.OnlyMorpho.selector);
 
-        arbitrage.onMorphoFlashLoan(1e6, 0, data);
+        arbitrage.onMorphoFlashLoan(1e6, data);
     }
 
     function testSuccessfulArbitrage() public {
@@ -114,5 +114,45 @@ contract FlashLoanArbitrageTest is Test {
         arbitrage.initiateFlashLoan(address(usdc), 1000e6, address(weth), 3000, 1, 0, 1, 1, block.timestamp + 1 hours);
 
         assertGt(usdc.balanceOf(address(arbitrage)), 0);
+    }
+
+    function testSlippageProtectionRevertsOnFirstSwap() public {
+        uni.setMultiplier(90);
+
+        vm.expectRevert(bytes("Too little received"));
+
+        arbitrage.initiateFlashLoan(
+            address(usdc), 1000e6, address(weth), 3000, 1, 0, 1001e6, 1, block.timestamp + 1 hours
+        );
+    }
+
+    function testProtectedFlashLoanRevertsHighGasPrice() public {
+        vm.txGasPrice(101 gwei);
+
+        vm.expectRevert(FlashLoanArbitrage.GasPriceTooHigh.selector);
+
+        arbitrage.initiateProtectedFlashLoan(
+            address(usdc), 1000e6, address(weth), 3000, 1, 0, 1, 1, block.timestamp + 1 hours, 0, 100 gwei, 0
+        );
+    }
+
+    function testProtectedFlashLoanRevertsExpiredBlockWindow() public {
+        vm.roll(10);
+
+        vm.expectRevert(FlashLoanArbitrage.BlockWindowExpired.selector);
+
+        arbitrage.initiateProtectedFlashLoan(
+            address(usdc), 1000e6, address(weth), 3000, 1, 0, 1, 1, block.timestamp + 1 hours, 0, 0, 9
+        );
+    }
+
+    function testExistingBalanceDoesNotMaskBadTrade() public {
+        usdc.mint(address(arbitrage), 1000e6);
+        uni.setMultiplier(100);
+        sushi.setMultiplier(100);
+
+        vm.expectRevert(FlashLoanArbitrage.ProfitTooLow.selector);
+
+        arbitrage.initiateFlashLoan(address(usdc), 1000e6, address(weth), 3000, 1, 0, 1, 1, block.timestamp + 1 hours);
     }
 }

@@ -11,7 +11,7 @@ contract MockSushiRouter is IUniV2Router {
         multiplier = _multiplier;
     }
 
-    function swapExactTokensForTokens(uint256 amountIn, uint256, address[] calldata path, address to, uint256)
+    function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] calldata path, address to, uint256)
         external
         override
         returns (uint256[] memory amounts)
@@ -19,6 +19,7 @@ contract MockSushiRouter is IUniV2Router {
         IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn);
 
         uint256 amountOut = (amountIn * multiplier) / 100;
+        require(amountOut >= amountOutMin, "Too little received");
 
         IERC20(path[1]).transfer(to, amountOut);
 

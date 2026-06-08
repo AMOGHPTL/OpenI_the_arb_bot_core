@@ -1,20 +1,36 @@
-.PHONY: help build test deploy-base deploy-eth deploy-arbitrum deploy-local verify clean
+.PHONY: help build test test-unit test-fork deploy-base deploy-eth deploy-arbitrum deploy-local anvil verify-base clean run-monitor run-bot
+
+-include .env
+export
+
+ifeq ($(OS),Windows_NT)
+FOUNDRY_BIN := $(subst \,/,$(USERPROFILE))/.foundry/bin
+ANVIL ?= $(FOUNDRY_BIN)/anvil.exe
+else
+ANVIL ?= anvil
+endif
+
+NODE ?= node
+
+DEPLOY_SCRIPT := script/FlashLoanDeploy.s.sol:DeployFlashLoanArb
+LOCAL_DEPLOY_SCRIPT := script/DeployLocal.s.sol:DeployFlashLoanArbLocal
 
 help:
-	@echo "Flash Loan Arbitrage Bot - Foundry Commands"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "make build         - Build the contracts"
-	@echo "make test          - Run tests"
-	@echo "make test-fork     - Run fork tests"
-	@echo "make deploy-base   - Deploy to Base mainnet"
-	@echo "make deploy-eth    - Deploy to Ethereum mainnet"
-	@echo "make deploy-arbitrum - Deploy to Arbitrum"
-	@echo "make deploy-local  - Deploy to local anvil"
-	@echo "make verify-base   - Verify contract on BaseScan"
-	@echo "make clean         - Clean build artifacts"
-	@echo "make run-monitor   - Run price monitor"
-	@echo "make run-bot       - Run execution engine"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo Flash Loan Arbitrage Bot - Foundry Commands
+	@echo ----------------------------------------------------
+	@echo make build           - Build the contracts
+	@echo make test            - Run all tests
+	@echo make test-unit       - Run unit tests only
+	@echo make test-fork       - Run Base fork test only
+	@echo make deploy-base     - Deploy to Base mainnet
+	@echo make deploy-eth      - Deploy to Ethereum mainnet
+	@echo make deploy-arbitrum - Deploy to Arbitrum
+	@echo make deploy-local    - Deploy to local Anvil
+	@echo make verify-base     - Verify contract on BaseScan
+	@echo make clean           - Clean Foundry build artifacts
+	@echo make run-monitor     - Run price monitor
+	@echo make run-bot         - Run execution engine
+	@echo ----------------------------------------------------
 
 build:
 	forge build
@@ -22,30 +38,36 @@ build:
 test:
 	forge test
 
-test-fork:
-	forge test --fork-url base -vvv
+test-unit:
+	forge test --match-contract FlashLoanArbitrageTest -vvv
 
+test-fork:
+	forge test --match-contract FlashLoanArbitrageForkTest -vv
+
+deploy-base: NETWORK=base
 deploy-base:
 	@echo "Deploying to Base mainnet..."
-	forge script script/DeployFlashLoanArb.s.sol:DeployFlashLoanArb \
+	forge script $(DEPLOY_SCRIPT) \
 		--rpc-url base \
 		--broadcast \
 		--verify \
 		--private-key $(PRIVATE_KEY) \
 		-vvv
 
+deploy-eth: NETWORK=ethereum
 deploy-eth:
 	@echo "Deploying to Ethereum mainnet..."
-	forge script script/DeployFlashLoanArb.s.sol:DeployFlashLoanArb \
+	forge script $(DEPLOY_SCRIPT) \
 		--rpc-url ethereum \
 		--broadcast \
 		--verify \
 		--private-key $(PRIVATE_KEY) \
 		-vvv
 
+deploy-arbitrum: NETWORK=arbitrum
 deploy-arbitrum:
 	@echo "Deploying to Arbitrum..."
-	forge script script/DeployFlashLoanArb.s.sol:DeployFlashLoanArb \
+	forge script $(DEPLOY_SCRIPT) \
 		--rpc-url arbitrum \
 		--broadcast \
 		--verify \
@@ -53,17 +75,14 @@ deploy-arbitrum:
 		-vvv
 
 deploy-local:
-	@echo "Starting local anvil node..."
-	@make anvil & sleep 3
 	@echo "Deploying locally..."
-	forge script script/DeployFlashLoanArbLocal.s.sol:DeployFlashLoanArbLocal \
+	forge script $(LOCAL_DEPLOY_SCRIPT) \
 		--rpc-url http://localhost:8545 \
 		--broadcast \
 		-vvv
-	@echo "Local deployment complete. Anvil node running in background."
 
 anvil:
-	anvil --fork-url https://mainnet.base.org --fork-block-number 20000000
+	$(ANVIL) --fork-url base
 
 verify-base:
 	forge verify-contract \
@@ -72,43 +91,13 @@ verify-base:
 		--compiler-version v0.8.23 \
 		$(CONTRACT_BASE) \
 		src/FlashLoanArbitrage.sol:FlashLoanArbitrage \
-		$(ETHERSCAN_API_KEY)
+		$(BASESCAN_API_KEY)
 
 clean:
 	forge clean
-	rm -rf deployments/*.json
 
 run-monitor:
-	node scripts/priceMonitor.js
+	$(NODE) scripts/priceMonitor.js
 
 run-bot:
-	node scripts/executionEngine.js
-
-.PHONY: help build test deploy-base deploy-eth deploy-local verify clean
-
-# 1. Build the project
-forge build
-
-# 2. Run tests
-forge test
-
-# 3. Deploy to Base (using Makefile)
-make deploy-base
-
-# Or manually:
-NETWORK=base forge script script/DeployFlashLoanArb.s.sol:DeployFlashLoanArb \
-  --rpc-url base \
-  --broadcast \
-  --verify \
-  --private-key $PRIVATE_KEY
-
-# 4. Deploy to Ethereum
-make deploy-eth
-
-# 5. Deploy locally for testing
-make deploy-local
-
-# 6. Run the Node.js bot
-cd scripts
-npm install
-node executionEngine.js
+	$(NODE) scripts/executionEngine.js

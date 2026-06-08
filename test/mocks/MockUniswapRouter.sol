@@ -15,6 +15,7 @@ contract MockUniswapRouter is ISwapRouter {
         IERC20(params.tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
 
         amountOut = (params.amountIn * multiplier) / 100;
+        require(amountOut >= params.amountOutMinimum, "Too little received");
 
         IERC20(params.tokenOut).transfer(params.recipient, amountOut);
     }

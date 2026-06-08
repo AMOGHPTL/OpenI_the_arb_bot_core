@@ -8,6 +8,8 @@ contract MockMorpho {
     function flashLoan(address loanToken, uint256 loanAmount, bytes calldata data) external {
         IERC20(loanToken).transfer(msg.sender, loanAmount);
 
-        IMorphoFlashLoanCallback(msg.sender).onMorphoFlashLoan(loanAmount, 0, data);
+        IMorphoFlashLoanCallback(msg.sender).onMorphoFlashLoan(loanAmount, data);
+
+        IERC20(loanToken).transferFrom(msg.sender, address(this), loanAmount);
     }
 }

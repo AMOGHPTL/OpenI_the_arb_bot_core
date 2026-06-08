@@ -4,15 +4,8 @@ pragma solidity ^0.8.0;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
-interface IMorpho {
-    function flashLoan(address loanToken, uint256 loanAmount, bytes calldata data) external;
-}
-
-interface IMorphoFlashLoanCallback {
-    function onMorphoFlashLoan(uint256 amount, uint256 fee, bytes calldata data) external;
-}
+import {IMorpho} from "./interfaces/IMorpho.sol";
+import {IMorphoFlashLoanCallback} from "./interfaces/IMorphoCallbacks.sol";
 
 interface ISwapRouter {
     struct ExactInputSingleParams {
@@ -38,12 +31,14 @@ interface IUniV2Router {
     ) external returns (uint256[] memory amounts);
 }
 
-contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuard {
+contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
     using SafeERC20 for IERC20;
 
     IMorpho public immutable MORPHO;
     ISwapRouter public immutable UNISWAP_ROUTER;
     IUniV2Router public immutable SUSHI_ROUTER;
+
+    mapping(address token => mapping(address spender => bool approved)) private s_isMaxApproved;
 
     event ArbitrageExecuted(address indexed asset, uint256 profit, uint256 timestamp);
     event ProfitWithdrawn(address indexed token, uint256 amount);
@@ -60,7 +55,27 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         uint256 minAmountOutFirst;
         uint256 minAmountOutSecond;
         uint256 deadline;
+        uint160 uniswapSqrtPriceLimitX96;
+        uint256 maxGasPrice;
+        uint256 validUntilBlock;
     }
+
+    error ZeroAmount();
+    error ZeroAddress();
+    error InvalidMorphoAddress();
+    error InvalidUniswapRouter();
+    error InvalidSushiRouter();
+    error SameToken();
+    error InvalidDirection();
+    error DeadlineExpired();
+    error FlashLoanNotReceived();
+    error InsufficientRepayment();
+    error ProfitTooLow();
+    error OnlyMorpho();
+    error NoBalance();
+    error EthTransferFailed();
+    error GasPriceTooHigh();
+    error BlockWindowExpired();
 
     // Reference addresses (verify before use):
     //
@@ -72,16 +87,16 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
     // Base mainnet
     //   Morpho Blue:   0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
     //   Uniswap V3:    0x2626664c2603336E57B271c5C0b26F421741e481
-    //   Aerodrome:     0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43
+    //   Aerodrome:     0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24
     //
     // Arbitrum
     //   Morpho Blue:   0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
     //   Uniswap V3:    0xE592427A0AEce92De3Edee1F18E0157C05861564
     //   SushiSwap V2:  0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506
     constructor(address _morpho, address _uniswapRouter, address _sushiRouter) Ownable(msg.sender) {
-        require(_morpho != address(0), "Invalid Morpho address");
-        require(_uniswapRouter != address(0), "Invalid Uniswap router");
-        require(_sushiRouter != address(0), "Invalid Sushi router");
+        if (_morpho == address(0)) revert InvalidMorphoAddress();
+        if (_uniswapRouter == address(0)) revert InvalidUniswapRouter();
+        if (_sushiRouter == address(0)) revert InvalidSushiRouter();
 
         MORPHO = IMorpho(_morpho);
         UNISWAP_ROUTER = ISwapRouter(_uniswapRouter);
@@ -98,15 +113,74 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         uint256 minAmountOutFirst,
         uint256 minAmountOutSecond,
         uint256 deadline
-    ) external onlyOwner nonReentrant {
-        require(amount > 0, "Amount must be > 0");
-        require(token != address(0), "Invalid token");
-        require(intermediateToken != address(0), "Invalid intermediate token");
-        require(intermediateToken != token, "Tokens must differ");
-        require(direction <= 1, "Direction must be 0 or 1");
-        require(deadline > block.timestamp, "Deadline in past");
-        require(minAmountOutFirst > 0, "minAmountOutFirst must be > 0");
-        require(minAmountOutSecond > 0, "minAmountOutSecond must be > 0");
+    ) external onlyOwner {
+        _initiateFlashLoan(
+            token,
+            amount,
+            intermediateToken,
+            fee,
+            minProfit,
+            direction,
+            minAmountOutFirst,
+            minAmountOutSecond,
+            deadline,
+            0,
+            0,
+            0
+        );
+    }
+
+    function initiateProtectedFlashLoan(
+        address token,
+        uint256 amount,
+        address intermediateToken,
+        uint24 fee,
+        uint256 minProfit,
+        uint8 direction,
+        uint256 minAmountOutFirst,
+        uint256 minAmountOutSecond,
+        uint256 deadline,
+        uint160 uniswapSqrtPriceLimitX96,
+        uint256 maxGasPrice,
+        uint256 validUntilBlock
+    ) external onlyOwner {
+        _initiateFlashLoan(
+            token,
+            amount,
+            intermediateToken,
+            fee,
+            minProfit,
+            direction,
+            minAmountOutFirst,
+            minAmountOutSecond,
+            deadline,
+            uniswapSqrtPriceLimitX96,
+            maxGasPrice,
+            validUntilBlock
+        );
+    }
+
+    function _initiateFlashLoan(
+        address token,
+        uint256 amount,
+        address intermediateToken,
+        uint24 fee,
+        uint256 minProfit,
+        uint8 direction,
+        uint256 minAmountOutFirst,
+        uint256 minAmountOutSecond,
+        uint256 deadline,
+        uint160 uniswapSqrtPriceLimitX96,
+        uint256 maxGasPrice,
+        uint256 validUntilBlock
+    ) internal {
+        if (amount == 0) revert ZeroAmount();
+        if (token == address(0) || intermediateToken == address(0)) revert ZeroAddress();
+        if (intermediateToken == token) revert SameToken();
+        if (direction > 1) revert InvalidDirection();
+        if (deadline <= block.timestamp) revert DeadlineExpired();
+        if (minAmountOutFirst == 0 || minAmountOutSecond == 0) revert ZeroAmount();
+        _validateMevGuards(maxGasPrice, validUntilBlock);
 
         bytes memory data = abi.encode(
             ArbitrageData({
@@ -117,7 +191,10 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
                 direction: direction,
                 minAmountOutFirst: minAmountOutFirst,
                 minAmountOutSecond: minAmountOutSecond,
-                deadline: deadline
+                deadline: deadline,
+                uniswapSqrtPriceLimitX96: uniswapSqrtPriceLimitX96,
+                maxGasPrice: maxGasPrice,
+                validUntilBlock: validUntilBlock
             })
         );
 
@@ -125,13 +202,19 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         MORPHO.flashLoan(token, amount, data);
     }
 
-    function onMorphoFlashLoan(uint256 amount, uint256 fee, bytes calldata data) external override {
-        require(msg.sender == address(MORPHO), "Only Morpho can callback");
+    function onMorphoFlashLoan(uint256 amount, bytes calldata data) external override {
+        if (msg.sender != address(MORPHO)) revert OnlyMorpho();
 
         ArbitrageData memory arbData = abi.decode(data, (ArbitrageData));
+        _validateMevGuards(arbData.maxGasPrice, arbData.validUntilBlock);
+
         IERC20 tokenBorrowed = IERC20(arbData.tokenBorrowed);
 
-        require(tokenBorrowed.balanceOf(address(this)) >= amount, "Flash loan not received");
+        uint256 startingBalance = tokenBorrowed.balanceOf(address(this));
+        if (startingBalance < amount) revert FlashLoanNotReceived();
+        unchecked {
+            startingBalance -= amount;
+        }
 
         uint256 finalBalance;
         if (arbData.direction == 0) {
@@ -140,13 +223,22 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
             finalBalance = _executeSushiToUni(amount, arbData);
         }
 
-        uint256 totalRepayment = amount + fee;
-        require(finalBalance >= totalRepayment, "Insufficient funds for repayment");
+        uint256 totalRepayment = amount;
+        if (finalBalance < startingBalance) revert InsufficientRepayment();
 
-        uint256 profit = finalBalance - totalRepayment;
-        require(profit >= arbData.minProfit, "Profit below minimum threshold");
+        uint256 tradeBalance;
+        unchecked {
+            tradeBalance = finalBalance - startingBalance;
+        }
+        if (tradeBalance < totalRepayment) revert InsufficientRepayment();
 
-        tokenBorrowed.forceApprove(address(MORPHO), totalRepayment);
+        uint256 profit;
+        unchecked {
+            profit = tradeBalance - totalRepayment;
+        }
+        if (profit < arbData.minProfit) revert ProfitTooLow();
+
+        _approveMaxIfNeeded(arbData.tokenBorrowed, address(MORPHO));
 
         emit ArbitrageExecuted(arbData.tokenBorrowed, profit, block.timestamp);
     }
@@ -158,18 +250,17 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
             arbData.uniswapFee,
             amount,
             arbData.minAmountOutFirst,
-            arbData.deadline
+            arbData.deadline,
+            arbData.uniswapSqrtPriceLimitX96
         );
-        require(intermediateAmount > 0, "Uniswap swap returned 0");
 
-        uint256 finalAmount = _swapOnSushiswap(
+        _swapOnSushiswap(
             arbData.tokenIntermediate,
             arbData.tokenBorrowed,
             intermediateAmount,
             arbData.minAmountOutSecond,
             arbData.deadline
         );
-        require(finalAmount > 0, "Sushi swap returned 0");
 
         finalBalance = IERC20(arbData.tokenBorrowed).balanceOf(address(this));
     }
@@ -178,17 +269,16 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         uint256 intermediateAmount = _swapOnSushiswap(
             arbData.tokenBorrowed, arbData.tokenIntermediate, amount, arbData.minAmountOutFirst, arbData.deadline
         );
-        require(intermediateAmount > 0, "Sushi swap returned 0");
 
-        uint256 finalAmount = _swapOnUniswap(
+        _swapOnUniswap(
             arbData.tokenIntermediate,
             arbData.tokenBorrowed,
             arbData.uniswapFee,
             intermediateAmount,
             arbData.minAmountOutSecond,
-            arbData.deadline
+            arbData.deadline,
+            arbData.uniswapSqrtPriceLimitX96
         );
-        require(finalAmount > 0, "Uniswap swap returned 0");
 
         finalBalance = IERC20(arbData.tokenBorrowed).balanceOf(address(this));
     }
@@ -199,9 +289,11 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         uint24 fee,
         uint256 amountIn,
         uint256 minAmountOut,
-        uint256 deadline
+        uint256 deadline,
+        uint160 sqrtPriceLimitX96
     ) internal returns (uint256 amountOut) {
-        IERC20(tokenIn).forceApprove(address(UNISWAP_ROUTER), amountIn);
+        address router = address(UNISWAP_ROUTER);
+        _approveMaxIfNeeded(tokenIn, router);
 
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,
@@ -211,11 +303,15 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
             deadline: deadline,
             amountIn: amountIn,
             amountOutMinimum: minAmountOut,
-            sqrtPriceLimitX96: 0
+            sqrtPriceLimitX96: sqrtPriceLimitX96
         });
 
         amountOut = UNISWAP_ROUTER.exactInputSingle(params);
-        IERC20(tokenIn).forceApprove(address(UNISWAP_ROUTER), 0);
+    }
+
+    function _validateMevGuards(uint256 maxGasPrice, uint256 validUntilBlock) internal view {
+        if (maxGasPrice != 0 && tx.gasprice > maxGasPrice) revert GasPriceTooHigh();
+        if (validUntilBlock != 0 && block.number > validUntilBlock) revert BlockWindowExpired();
     }
 
     function _swapOnSushiswap(
@@ -225,7 +321,7 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         uint256 minAmountOut,
         uint256 deadline
     ) internal returns (uint256 amountOut) {
-        IERC20(tokenIn).forceApprove(address(SUSHI_ROUTER), amountIn);
+        _approveMaxIfNeeded(tokenIn, address(SUSHI_ROUTER));
 
         address[] memory path = new address[](2);
         path[0] = tokenIn;
@@ -234,29 +330,35 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         uint256[] memory amounts =
             SUSHI_ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, path, address(this), deadline);
 
-        IERC20(tokenIn).forceApprove(address(SUSHI_ROUTER), 0);
-        amountOut = amounts[amounts.length - 1];
+        amountOut = amounts[1];
+    }
+
+    function _approveMaxIfNeeded(address token, address spender) internal {
+        if (!s_isMaxApproved[token][spender]) {
+            s_isMaxApproved[token][spender] = true;
+            IERC20(token).forceApprove(spender, type(uint256).max);
+        }
     }
 
     function withdrawProfit(address token) external onlyOwner {
         uint256 balance = IERC20(token).balanceOf(address(this));
-        require(balance > 0, "No balance to withdraw");
+        if (balance == 0) revert NoBalance();
         IERC20(token).safeTransfer(owner(), balance);
         emit ProfitWithdrawn(token, balance);
     }
 
     function rescueTokens(address token, uint256 amount) external onlyOwner {
-        require(token != address(0), "Invalid token");
-        require(amount > 0, "Amount must be > 0");
+        if (token == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
         IERC20(token).safeTransfer(owner(), amount);
         emit TokensRescued(token, amount);
     }
 
     function rescueETH() external onlyOwner {
         uint256 bal = address(this).balance;
-        require(bal > 0, "No ETH to rescue");
+        if (bal == 0) revert NoBalance();
         (bool ok,) = owner().call{value: bal}("");
-        require(ok, "ETH transfer failed");
+        if (!ok) revert EthTransferFailed();
         emit ETHRescued(bal);
     }
 

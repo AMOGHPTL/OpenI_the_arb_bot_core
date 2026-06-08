@@ -7,18 +7,6 @@ optimizer = true
 optimizer_runs = 200
 evm_version = "shanghai"
 
-[profile.base]
-fork_url = "https://mainnet.base.org"
-chain_id = 8453
-
-[profile.ethereum]
-fork_url = "https://eth.llamarpc.com"
-chain_id = 1
-
-[profile.arbitrum]
-fork_url = "https://arb1.arbitrum.io/rpc"
-chain_id = 42161
-
 [rpc_endpoints]
 base = "https://mainnet.base.org"
 ethereum = "https://eth.llamarpc.com"
