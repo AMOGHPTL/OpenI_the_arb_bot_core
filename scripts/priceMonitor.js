@@ -5,6 +5,9 @@
 
 const { ethers } = require("ethers");
 const EventEmitter = require("events");
+const path = require("path");
+
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────────
 
@@ -14,8 +17,19 @@ const CONFIG = {
       rpc: process.env.BASE_RPC_URL || "https://mainnet.base.org",
       chainId: 8453,
       morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa", // Morpho Blue on Base
-      uniswapV3Quoter: "0x3d4e44Eb1374240CE5F1B136041212501e4a3569",
+      uniswapV3Quoter: "0x3d4e44eb1374240ce5f1b136041212501e4a3569",
       sushiswapRouter: "0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891",
+      pairs: [
+        {
+          name: "WETH/USDC",
+          tokenIn: "0x4200000000000000000000000000000000000006",
+          tokenOut: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          decimalsIn: 18,
+          decimalsOut: 6,
+          amountIn: ethers.parseEther("1"),
+          uniswapFee: 500,
+        },
+      ],
     },
     ethereum: {
       rpc: process.env.ETH_RPC_URL || "https://eth.llamarpc.com",
@@ -23,30 +37,19 @@ const CONFIG = {
       morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa", // Morpho Blue on Ethereum
       uniswapV3Quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
       sushiswapRouter: "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F",
+      pairs: [
+        {
+          name: "WETH/USDC",
+          tokenIn: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+          tokenOut: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          decimalsIn: 18,
+          decimalsOut: 6,
+          amountIn: ethers.parseEther("1"),
+          uniswapFee: 500,
+        },
+      ],
     },
   },
-
-  // Token pairs to monitor
-  pairs: [
-    {
-      name: "WETH/USDC",
-      tokenIn: "0x4200000000000000000000000000000000000006", // WETH on Base
-      tokenOut: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC on Base
-      decimalsIn: 18,
-      decimalsOut: 6,
-      amountIn: ethers.parseEther("1"), // quote 1 WETH
-      uniswapFee: 500, // 0.05% pool
-    },
-    {
-      name: "WETH/USDT",
-      tokenIn: "0x4200000000000000000000000000000000000006",
-      tokenOut: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
-      decimalsIn: 18,
-      decimalsOut: 6,
-      amountIn: ethers.parseEther("1"),
-      uniswapFee: 500,
-    },
-  ],
 
   // Minimum spread (%) to flag as opportunity
   minSpreadPercent: 0.3,
@@ -135,10 +138,10 @@ class PriceMonitor extends EventEmitter {
   async getSushiPrice(chainName, pair) {
     try {
       const { sushiRouter } = this.contracts[chainName];
-      const path = [pair.tokenIn, pair.tokenOut];
+      const path = pair.sushiPath || [pair.tokenIn, pair.tokenOut];
       const amounts = await sushiRouter.getAmountsOut(pair.amountIn, path);
 
-      const amountOut = amounts[1];
+      const amountOut = amounts[amounts.length - 1];
       const price = Number(ethers.formatUnits(amountOut, pair.decimalsOut));
       return { price, amountOut, source: "sushiswap" };
     } catch (err) {
@@ -211,8 +214,8 @@ class PriceMonitor extends EventEmitter {
   }
 
   async poll() {
-    for (const chainName of Object.keys(CONFIG.chains)) {
-      for (const pair of CONFIG.pairs) {
+    for (const [chainName, cfg] of Object.entries(CONFIG.chains)) {
+      for (const pair of cfg.pairs) {
         const [uniPrice, sushiPrice] = await Promise.all([
           this.getUniswapPrice(chainName, pair),
           this.getSushiPrice(chainName, pair),
