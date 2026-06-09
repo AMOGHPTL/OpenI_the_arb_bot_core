@@ -16,11 +16,11 @@ const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // ─── Flash Loan Contract ABI (Morpho version) ───────────────────────────────────
 const FLASH_LOAN_ABI = [
-  "function initiateFlashLoan(address token, uint256 amount, address intermediateToken, uint24 fee, uint256 minProfit, uint8 direction, uint256 minAmountOutFirst, uint256 minAmountOutSecond) external",
+  "function initiateFlashLoan(address token, uint256 amount, address intermediateToken, uint24 fee, uint256 minProfit, uint8 direction, uint256 minAmountOutFirst, uint256 minAmountOutSecond, uint256 deadline) external",
+  "function initiateProtectedFlashLoan(address token, uint256 amount, address intermediateToken, uint24 fee, uint256 minProfit, uint8 direction, uint256 minAmountOutFirst, uint256 minAmountOutSecond, uint256 deadline, uint160 uniswapSqrtPriceLimitX96, uint256 maxGasPrice, uint256 validUntilBlock) external",
   "function withdrawProfit(address token) external",
   "function getBalance(address token) view returns (uint256)",
   "event ArbitrageExecuted(address indexed asset, uint256 profit, uint256 timestamp)",
-  "event ArbitrageFailed(string reason, uint256 timestamp)",
 ];
 
 // ─── EXECUTION CONFIG ──────────────────────────────────────────────────────────
@@ -47,6 +47,7 @@ class ExecutionEngine {
     this.contracts = {};
     this.lastExecuted = {};
     this.stats = { attempts: 0, successes: 0, failures: 0, totalProfitUSD: 0 };
+    this.executing = {}; // per-chain concurrency lock
   }
 
   async init() {
@@ -105,9 +106,9 @@ class ExecutionEngine {
 
     const provider = this.wallets[chain].provider;
     const feeData = await provider.getFeeData();
-    const gasPriceGwei = Number(
-      ethers.formatUnits(feeData.gasPrice || 0n, "gwei"),
-    );
+    // Use EIP-1559 maxFeePerGas on chains that support it; fall back to legacy gasPrice
+    const effectiveGasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
+    const gasPriceGwei = Number(ethers.formatUnits(effectiveGasPrice, "gwei"));
     const maxAllowed = EXEC_CONFIG.maxGasPriceGwei[chain];
 
     if (gasPriceGwei > maxAllowed) {
@@ -122,43 +123,58 @@ class ExecutionEngine {
       return false;
     }
 
-    const loanAmount = ethers.parseEther("1"); // Adjust based on your position sizing
-    if (loanAmount < EXEC_CONFIG.minLoanAmount[chain]) {
-      console.log(`  ⛔ Skipping: loan amount too small`);
-      return false;
-    }
-
     return true;
   }
 
   calculateMinAmounts(opportunity) {
-    const slippageMultiplier = (10000 - EXEC_CONFIG.slippageBps) / 10000;
+    const slippageBps = BigInt(EXEC_CONFIG.slippageBps);
+    const basisPoints = 10000n;
+
+    const applySlippage = (amount) =>
+      (BigInt(amount) * (basisPoints - slippageBps)) / basisPoints;
 
     let minFirst, minSecond;
 
     if (opportunity.direction.direction === 0) {
       // Uni -> Sushi
-      minFirst = Math.floor(
-        parseFloat(opportunity.raw.uniAmountOut) * slippageMultiplier,
-      ).toString();
-      minSecond = Math.floor(
-        parseFloat(opportunity.raw.sushiAmountOut) * slippageMultiplier,
-      ).toString();
+      minFirst = applySlippage(opportunity.raw.uniAmountOut).toString();
+      minSecond = applySlippage(opportunity.raw.sushiAmountOut).toString();
     } else {
       // Sushi -> Uni
-      minFirst = Math.floor(
-        parseFloat(opportunity.raw.sushiAmountOut) * slippageMultiplier,
-      ).toString();
-      minSecond = Math.floor(
-        parseFloat(opportunity.raw.uniAmountOut) * slippageMultiplier,
-      ).toString();
+      minFirst = applySlippage(opportunity.raw.sushiAmountOut).toString();
+      minSecond = applySlippage(opportunity.raw.uniAmountOut).toString();
     }
 
     return { minFirst, minSecond };
   }
 
+  // Compute minProfit in tokenBorrowed units directly from expected swap outputs,
+  // with slippage applied. Avoids any USD/price conversion entirely.
+  calculateMinProfit(opportunity, loanAmount) {
+    const slippageBps = BigInt(EXEC_CONFIG.slippageBps);
+    const basisPoints = 10000n;
+
+    // The second swap always returns tokenBorrowed. For direction 0 (Uni→Sushi)
+    // the round-trip output is sushiAmountOut; for direction 1 (Sushi→Uni) it's uniAmountOut.
+    const finalAmount =
+      opportunity.direction.direction === 0
+        ? BigInt(opportunity.raw.sushiAmountOut)
+        : BigInt(opportunity.raw.uniAmountOut);
+
+    const expectedProfit = finalAmount - loanAmount;
+    if (expectedProfit <= 0n) return 0n;
+    return (expectedProfit * (basisPoints - slippageBps)) / basisPoints;
+  }
+
   async execute(opportunity) {
     const { chain, pair, netProfitUSD, raw, direction } = opportunity;
+
+    // Per-chain concurrency guard — prevents nonce collisions from overlapping executions
+    if (this.executing[chain]) {
+      console.log(`  ⛔ Skipping: execution already in progress on ${chain}`);
+      return;
+    }
+    this.executing[chain] = true;
     this.stats.attempts++;
 
     console.log(`\n⚡ EXECUTING ARBITRAGE`);
@@ -169,19 +185,24 @@ class ExecutionEngine {
 
     try {
       const contract = this.contracts[chain];
-      const loanAmount = ethers.parseEther("1"); // 1 ETH worth
-      const minProfit = ethers.parseUnits(netProfitUSD, raw.decimalsOut);
+      const provider = this.wallets[chain].provider;
+      const loanAmount = ethers.parseUnits("1", raw.decimalsIn ?? 18);
 
       const { minFirst, minSecond } = this.calculateMinAmounts(opportunity);
+      const minProfitWei = this.calculateMinProfit(opportunity, loanAmount);
+      const deadline = Math.floor(Date.now() / 1000) + 120;
 
-      const minProfitWei = ethers.parseUnits(
-        (
-          parseFloat(netProfitUSD) / parseFloat(opportunity.uniPrice)
-        ).toString(),
-        18,
-      );
+      // On-chain MEV guards: cap gas price and restrict to a short block window
+      const [feeData, currentBlock] = await Promise.all([
+        provider.getFeeData(),
+        provider.getBlockNumber(),
+      ]);
+      const effectiveGasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
+      // Allow 20% gas price headroom so the tx isn't rejected by a minor spike
+      const maxGasPrice = (effectiveGasPrice * 12n) / 10n;
+      const validUntilBlock = currentBlock + (chain === "base" ? 5 : 2);
 
-      const tx = await contract.initiateFlashLoan(
+      const callArgs = [
         raw.tokenIn,
         loanAmount,
         raw.tokenOut,
@@ -190,10 +211,17 @@ class ExecutionEngine {
         direction.direction,
         minFirst,
         minSecond,
-        {
-          gasLimit: 500000,
-        },
-      );
+        deadline,
+        0,           // uniswapSqrtPriceLimitX96 — 0 means no price limit
+        maxGasPrice,
+        validUntilBlock,
+      ];
+
+      // Estimate gas dynamically so we don't over/under-allocate
+      const estimatedGas = await contract.initiateProtectedFlashLoan.estimateGas(...callArgs);
+      const gasLimit = (estimatedGas * 130n) / 100n; // 30% buffer
+
+      const tx = await contract.initiateProtectedFlashLoan(...callArgs, { gasLimit });
 
       console.log(`   📤 Tx sent: ${tx.hash}`);
       console.log(`   ⏳ Waiting for confirmation...`);
@@ -202,15 +230,29 @@ class ExecutionEngine {
 
       if (receipt.status === 1) {
         this.stats.successes++;
-        this.stats.totalProfitUSD += parseFloat(netProfitUSD);
         this.lastExecuted[`${chain}-${pair}`] = Date.now();
 
+        // Read actual profit from the ArbitrageExecuted event rather than the estimate
+        const arbLog = receipt.logs
+          .map((log) => { try { return contract.interface.parseLog(log); } catch { return null; } })
+          .find((e) => e?.name === "ArbitrageExecuted");
+
+        let profitUSD = parseFloat(netProfitUSD);
+        if (arbLog) {
+          const profitTokens = Number(
+            ethers.formatUnits(arbLog.args.profit, raw.decimalsIn ?? 18),
+          );
+          const price = parseFloat(opportunity.uniPrice);
+          if (price > 0) profitUSD = profitTokens * price;
+        }
+        this.stats.totalProfitUSD += profitUSD;
+
         console.log(`   ✅ SUCCESS — block ${receipt.blockNumber}`);
+        console.log(`   💰 Actual profit: $${profitUSD.toFixed(2)}`);
         console.log(
           `   💰 Total profit so far: $${this.stats.totalProfitUSD.toFixed(2)}\n`,
         );
 
-        // Try to withdraw profit
         await this.withdrawProfit(chain, raw.tokenIn);
       } else {
         this.stats.failures++;
@@ -219,6 +261,8 @@ class ExecutionEngine {
     } catch (err) {
       this.stats.failures++;
       console.error(`   ❌ Execution error: ${err.message}\n`);
+    } finally {
+      this.executing[chain] = false;
     }
   }
 
@@ -244,9 +288,11 @@ class ExecutionEngine {
     console.log(`   Attempts  : ${this.stats.attempts}`);
     console.log(`   Successes : ${this.stats.successes}`);
     console.log(`   Failures  : ${this.stats.failures}`);
-    console.log(
-      `   Success Rate: ${((this.stats.successes / this.stats.attempts) * 100).toFixed(2)}%`,
-    );
+    const successRate =
+      this.stats.attempts > 0
+        ? ((this.stats.successes / this.stats.attempts) * 100).toFixed(2)
+        : "0.00";
+    console.log(`   Success Rate: ${successRate}%`);
     console.log(`   Total P&L : $${this.stats.totalProfitUSD.toFixed(2)}\n`);
   }
 
