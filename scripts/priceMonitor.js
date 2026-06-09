@@ -17,8 +17,8 @@ const CONFIG = {
       rpc: process.env.BASE_RPC_URL || "https://mainnet.base.org",
       chainId: 8453,
       morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa",
+      weth: "0x4200000000000000000000000000000000000006",
 
-      // Multiple DEXs on Base
       dexes: [
         {
           name: "uniswap_v3",
@@ -35,15 +35,13 @@ const CONFIG = {
           defaultFeePercent: 0.003,
         },
         {
-          name: "sushiswap_v3",
-          router: "0x2A9391c7eEF7A39b5e26C9c2a24669c53DAF5026",
-          quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
-          type: "v3",
-          defaultFee: 500,
+          name: "aerodrome_slipstream",
+          router: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+          quoter: "0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0",
+          type: "slipstream",
         },
       ],
 
-      // Only use pairs that actually exist on Base
       pairs: [
         {
           name: "WETH/USDC",
@@ -53,29 +51,44 @@ const CONFIG = {
           decimalsOut: 6,
           amountIn: ethers.parseEther("1"),
           uniswapFee: 500,
+          slipstreamTickSpacing: 100,
           enabled: true,
         },
-        // WBTC/USDC commented out - doesn't have enough liquidity on Base DEXs
+        // WETH/USDT and WETH/DAI disabled: bridged USDT and DAI have near-zero liquidity
+        // on Base — both DEXes consistently fail the 5% internal-spread sanity check.
         // {
-        //   name: "WBTC/USDC",
-        //   tokenIn: "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
-        //   tokenOut: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        //   decimalsIn: 8,
-        //   decimalsOut: 6,
-        //   amountIn: ethers.parseUnits("0.1", 8),
-        //   uniswapFee: 500,
-        //   enabled: false,
+        //   name: "WETH/USDT",
+        //   tokenIn: "0x4200000000000000000000000000000000000006",
+        //   tokenOut: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+        //   decimalsIn: 18, decimalsOut: 6,
+        //   amountIn: ethers.parseEther("1"), uniswapFee: 500, enabled: false,
         // },
-        // USDC/DAI commented out - DAI on Base has different address
         // {
-        //   name: "USDC/DAI",
-        //   tokenIn: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        //   name: "WETH/DAI",
+        //   tokenIn: "0x4200000000000000000000000000000000000006",
         //   tokenOut: "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
-        //   decimalsIn: 6,
-        //   decimalsOut: 18,
-        //   amountIn: ethers.parseUnits("5000", 6),
-        //   uniswapFee: 100,
-        //   enabled: false,
+        //   decimalsIn: 18, decimalsOut: 18,
+        //   amountIn: ethers.parseEther("1"), uniswapFee: 500, enabled: false,
+        // },
+        {
+          name: "USDC/USDT",
+          tokenIn: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  // USDC
+          tokenOut: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", // USDT
+          decimalsIn: 6,
+          decimalsOut: 6,
+          amountIn: ethers.parseUnits("1000", 6),
+          uniswapFee: 100,
+          stablePool: true,
+          slipstreamTickSpacing: 1,
+          enabled: true,
+        },
+        // cbETH/USDC disabled: Aerodrome only has cbETH/WETH liquidity on Base.
+        // {
+        //   name: "cbETH/USDC",
+        //   tokenIn: "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", // cbETH
+        //   tokenOut: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC
+        //   decimalsIn: 18, decimalsOut: 6,
+        //   amountIn: ethers.parseEther("1"), uniswapFee: 500, enabled: true,
         // },
       ],
     },
@@ -84,8 +97,8 @@ const CONFIG = {
       rpc: process.env.ETH_RPC_URL || "https://eth.llamarpc.com",
       chainId: 1,
       morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa",
+      weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
 
-      // Multiple DEXs on Ethereum
       dexes: [
         {
           name: "uniswap_v3",
@@ -96,14 +109,31 @@ const CONFIG = {
         },
         {
           name: "sushiswap_v3",
-          router: "0x64e8802FE490fa7cc61d3463958199161Bb608A7",
-          quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+          router: "0x2E6cd2d30aa43f40aa81619ff4b6E0a41479B13F",
+          quoter: "0x64e8802FE490fa7cc61d3463958199161Bb608A7",
           type: "v3",
+          defaultFee: 500,
+        },
+        {
+          name: "sushiswap_v2",
+          router: "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F",
+          type: "v2",
           defaultFee: 3000,
+        },
+        {
+          // tricrypto2: USDT(0) / WBTC(1) / WETH(2)
+          name: "curve_tricrypto",
+          pool: "0xD51a44d3FaE010294C616388b506AcdA1bfAAE46",
+          type: "curve_crypto",
+          defaultFee: 3000,
+          coinIndex: {
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2": 2, // WETH
+            "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599": 1, // WBTC
+            "0xdAC17F958D2ee523a2206206994597C13D831ec7": 0, // USDT
+          },
         },
       ],
 
-      // Only use pairs that actually exist on Ethereum
       pairs: [
         {
           name: "WETH/USDC",
@@ -119,6 +149,26 @@ const CONFIG = {
           name: "WBTC/USDC",
           tokenIn: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", // WBTC
           tokenOut: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+          decimalsIn: 8,
+          decimalsOut: 6,
+          amountIn: ethers.parseUnits("0.01", 8),
+          uniswapFee: 500,
+          enabled: true,
+        },
+        {
+          name: "WETH/USDT",
+          tokenIn: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH
+          tokenOut: "0xdAC17F958D2ee523a2206206994597C13D831ec7", // USDT
+          decimalsIn: 18,
+          decimalsOut: 6,
+          amountIn: ethers.parseEther("1"),
+          uniswapFee: 500,
+          enabled: true,
+        },
+        {
+          name: "WBTC/USDT",
+          tokenIn: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", // WBTC
+          tokenOut: "0xdAC17F958D2ee523a2206206994597C13D831ec7", // USDT
           decimalsIn: 8,
           decimalsOut: 6,
           amountIn: ethers.parseUnits("0.01", 8),
@@ -142,13 +192,13 @@ const CONFIG = {
   // Global settings
   minNetProfitUSD: 1,
   minSpreadPercent: 0.1,
-  pollIntervalMs: 3000,
+  pollIntervalMs: 3_000,
+  quoteTimeoutMs: 5_000,   // per-DEX quote timeout; hung RPC won't stall the whole poll
+  oppCooldownMs: 30_000,   // minimum ms between re-emitting the same direction opportunity
   estimatedGasUnits: 400_000n,
   morphoFeePercent: 0.0005,
   slippageBuffer: 0.005,
   maxOpportunitiesStored: 500,
-  maxStalePollCount: 500,
-  stalenessPriceToleranceUSD: 2,
   gasEstimateFallbackUSD: 5,
 };
 
@@ -162,6 +212,18 @@ const AERODROME_ROUTER_ABI = [
   "function getAmountsOut(uint256 amountIn, (address from, address to, bool stable, address factory)[] routes) external view returns (uint256[] memory amounts)",
 ];
 
+const V2_ROUTER_ABI = [
+  "function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[] memory amounts)",
+];
+
+const CURVE_CRYPTO_ABI = [
+  "function get_dy(uint256 i, uint256 j, uint256 dx) view returns (uint256)",
+];
+
+const SLIPSTREAM_QUOTER_ABI = [
+  "function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, int24 tickSpacing, uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)",
+];
+
 // ─── PRICE MONITOR CLASS ───────────────────────────────────────────────────────
 
 class PriceMonitor extends EventEmitter {
@@ -171,7 +233,10 @@ class PriceMonitor extends EventEmitter {
     this.contracts = {};
     this.running = false;
     this.opportunities = [];
-    this._priceHistory = {};
+    this._ethPriceUSD = {};       // per-chain ETH price derived from WETH pair quotes
+    this._cachedGasPriceWei = {}; // per-chain gas price refreshed once per poll cycle
+    this._lastEmitted = {};       // oppKey → timestamp, prevents flooding execution engine
+    this._pollTimer = null;
   }
 
   async init() {
@@ -182,36 +247,31 @@ class PriceMonitor extends EventEmitter {
       this.providers[chainName] = provider;
       this.contracts[chainName] = {};
 
-      // Initialize contracts for each DEX
       for (const dex of cfg.dexes) {
         try {
           if (dex.type === "aerodrome") {
-            const contract = new ethers.Contract(
-              dex.router,
-              AERODROME_ROUTER_ABI,
-              provider,
-            );
-            this.contracts[chainName][dex.name] = {
-              contract,
-              config: dex,
-            };
+            const contract = new ethers.Contract(dex.router, AERODROME_ROUTER_ABI, provider);
+            this.contracts[chainName][dex.name] = { contract, config: dex };
             console.log(`  ✅ ${chainName}: ${dex.name} initialized`);
           } else if (dex.type === "v3") {
-            const contract = new ethers.Contract(
-              dex.quoter,
-              V3_QUOTER_ABI,
-              provider,
-            );
-            this.contracts[chainName][dex.name] = {
-              contract,
-              config: dex,
-            };
+            const contract = new ethers.Contract(dex.quoter, V3_QUOTER_ABI, provider);
+            this.contracts[chainName][dex.name] = { contract, config: dex };
+            console.log(`  ✅ ${chainName}: ${dex.name} initialized`);
+          } else if (dex.type === "v2") {
+            const contract = new ethers.Contract(dex.router, V2_ROUTER_ABI, provider);
+            this.contracts[chainName][dex.name] = { contract, config: dex };
+            console.log(`  ✅ ${chainName}: ${dex.name} initialized`);
+          } else if (dex.type === "curve_crypto") {
+            const contract = new ethers.Contract(dex.pool, CURVE_CRYPTO_ABI, provider);
+            this.contracts[chainName][dex.name] = { contract, config: dex };
+            console.log(`  ✅ ${chainName}: ${dex.name} initialized`);
+          } else if (dex.type === "slipstream") {
+            const contract = new ethers.Contract(dex.quoter, SLIPSTREAM_QUOTER_ABI, provider);
+            this.contracts[chainName][dex.name] = { contract, config: dex };
             console.log(`  ✅ ${chainName}: ${dex.name} initialized`);
           }
         } catch (err) {
-          console.error(
-            `  ❌ ${chainName}: Failed to initialize ${dex.name}: ${err.message}`,
-          );
+          console.error(`  ❌ ${chainName}: Failed to initialize ${dex.name}: ${err.message}`);
         }
       }
 
@@ -235,184 +295,181 @@ class PriceMonitor extends EventEmitter {
 
     try {
       let sellAmountOut, buyAmountOut;
-      let fee;
+      let fee = dexConfig.defaultFee ?? 0;
+
+      const buyAmount =
+        pair.decimalsIn === 8
+          ? ethers.parseUnits("1000", 6)
+          : ethers.parseUnits("1000", pair.decimalsOut);
 
       if (dexConfig.type === "v3") {
         fee = pair.uniswapFee || dexConfig.defaultFee;
 
-        // Sell quote: tokenIn -> tokenOut
         const sellResult = await contract.quoteExactInputSingle.staticCall({
           tokenIn: pair.tokenIn,
           tokenOut: pair.tokenOut,
           amountIn: pair.amountIn,
-          fee: fee,
+          fee,
           sqrtPriceLimitX96: 0n,
         });
         sellAmountOut = sellResult[0];
-
-        // Buy quote: tokenOut -> tokenIn
-        let buyAmount;
-        if (pairName === "WBTC/USDC") {
-          // For WBTC buy, use 1000 USDC
-          buyAmount = ethers.parseUnits("1000", 6);
-        } else {
-          buyAmount = ethers.parseUnits("1000", pair.decimalsOut);
-        }
 
         const buyResult = await contract.quoteExactInputSingle.staticCall({
           tokenIn: pair.tokenOut,
           tokenOut: pair.tokenIn,
           amountIn: buyAmount,
-          fee: fee,
+          fee,
           sqrtPriceLimitX96: 0n,
         });
         buyAmountOut = buyResult[0];
       } else if (dexConfig.type === "aerodrome") {
         fee = dexConfig.defaultFeePercent * 1_000_000;
 
-        const routes = [
-          {
-            from: pair.tokenIn,
-            to: pair.tokenOut,
-            stable: false,
-            factory: dexConfig.factory,
-          },
-        ];
+        const isStable = pair.stablePool ?? false;
+        const routes = [{ from: pair.tokenIn, to: pair.tokenOut, stable: isStable, factory: dexConfig.factory }];
         const amounts = await contract.getAmountsOut(pair.amountIn, routes);
         sellAmountOut = amounts[amounts.length - 1];
 
-        let buyAmount;
-        if (pairName === "WBTC/USDC") {
-          buyAmount = ethers.parseUnits("1000", 6);
-        } else {
-          buyAmount = ethers.parseUnits("1000", pair.decimalsOut);
-        }
-
-        const buyRoutes = [
-          {
-            from: pair.tokenOut,
-            to: pair.tokenIn,
-            stable: false,
-            factory: dexConfig.factory,
-          },
-        ];
+        const buyRoutes = [{ from: pair.tokenOut, to: pair.tokenIn, stable: isStable, factory: dexConfig.factory }];
         const buyAmounts = await contract.getAmountsOut(buyAmount, buyRoutes);
-        buyAmountOut = buyAmounts[amounts.length - 1];
+        buyAmountOut = buyAmounts[buyAmounts.length - 1];
+      } else if (dexConfig.type === "v2") {
+        const weth = CONFIG.chains[chainName].weth;
+        // V2 has no direct WBTC/stablecoin pool — route through WETH when neither token is WETH
+        const sellPath = (pair.tokenIn !== weth && pair.tokenOut !== weth)
+          ? [pair.tokenIn, weth, pair.tokenOut]
+          : [pair.tokenIn, pair.tokenOut];
+        const buyPath = [...sellPath].reverse();
+        const sellAmounts = await contract.getAmountsOut(pair.amountIn, sellPath);
+        sellAmountOut = sellAmounts[sellAmounts.length - 1];
+        const buyAmounts = await contract.getAmountsOut(buyAmount, buyPath);
+        buyAmountOut = buyAmounts[buyAmounts.length - 1];
+      } else if (dexConfig.type === "curve_crypto") {
+        const indexIn = dexConfig.coinIndex?.[pair.tokenIn];
+        const indexOut = dexConfig.coinIndex?.[pair.tokenOut];
+        if (indexIn === undefined || indexOut === undefined) return null;
+        sellAmountOut = await contract.get_dy(indexIn, indexOut, pair.amountIn);
+        buyAmountOut = await contract.get_dy(indexOut, indexIn, buyAmount);
+      } else if (dexConfig.type === "slipstream") {
+        const tickSpacing = pair.slipstreamTickSpacing;
+        if (tickSpacing === undefined) return null; // pair has no Slipstream pool
+        const sellResult = await contract.quoteExactInputSingle.staticCall({
+          tokenIn: pair.tokenIn,
+          tokenOut: pair.tokenOut,
+          amountIn: pair.amountIn,
+          tickSpacing,
+          sqrtPriceLimitX96: 0n,
+        });
+        sellAmountOut = sellResult[0];
+        const buyResult = await contract.quoteExactInputSingle.staticCall({
+          tokenIn: pair.tokenOut,
+          tokenOut: pair.tokenIn,
+          amountIn: buyAmount,
+          tickSpacing,
+          sqrtPriceLimitX96: 0n,
+        });
+        buyAmountOut = buyResult[0];
+        fee = tickSpacing;
       } else {
         return null;
       }
 
-      // CRITICAL FIX: Calculate prices correctly for each pair type
       let sellPrice, buyPrice;
 
-      if (pairName === "WBTC/USDC") {
-        // For WBTC: amountIn is 0.01 WBTC, sellAmountOut is USDC amount
-        const wbtcAmount = Number(ethers.formatUnits(pair.amountIn, 8)); // 0.01
-        const usdcReceived = Number(ethers.formatUnits(sellAmountOut, 6));
-        sellPrice = usdcReceived / wbtcAmount; // USDC per WBTC (should be ~63,000)
-
-        // For buy: spent 1000 USDC, received buyAmountOut WBTC
+      if (pair.decimalsIn === 8) {
+        const wbtcAmount = Number(ethers.formatUnits(pair.amountIn, 8));
+        const usdReceived = Number(ethers.formatUnits(sellAmountOut, 6));
+        sellPrice = usdReceived / wbtcAmount;
         const wbtcReceived = Number(ethers.formatUnits(buyAmountOut, 8));
         buyPrice = wbtcReceived > 0 ? 1000 / wbtcReceived : Infinity;
-      } else if (pairName === "USDC/DAI") {
-        // Stable pair handling
-        const usdcAmount = Number(ethers.formatUnits(pair.amountIn, 6));
-        const daiReceived = Number(ethers.formatUnits(sellAmountOut, 18));
-        sellPrice = daiReceived / usdcAmount;
-
-        const spentAmount = 1000;
-        const received = Number(ethers.formatUnits(buyAmountOut, 6));
-        buyPrice = received > 0 ? spentAmount / received : Infinity;
+      } else if (pair.decimalsIn === 6) {
+        // Stablecoin-base pairs (USDC/USDT, USDC/DAI, etc.)
+        const amountIn = Number(ethers.formatUnits(pair.amountIn, pair.decimalsIn));
+        const amountOut = Number(ethers.formatUnits(sellAmountOut, pair.decimalsOut));
+        sellPrice = amountOut / amountIn;
+        const received = Number(ethers.formatUnits(buyAmountOut, pair.decimalsIn));
+        const buyAmountNum = Number(ethers.formatUnits(buyAmount, pair.decimalsOut));
+        buyPrice = received > 0 ? buyAmountNum / received : Infinity;
       } else {
         // WETH pairs
         const ethAmount = Number(ethers.formatEther(pair.amountIn));
-        const usdcReceived = Number(
-          ethers.formatUnits(sellAmountOut, pair.decimalsOut),
-        );
+        const usdcReceived = Number(ethers.formatUnits(sellAmountOut, pair.decimalsOut));
         sellPrice = usdcReceived / ethAmount;
-
-        const spentAmount = 1000;
         const ethReceived = Number(ethers.formatUnits(buyAmountOut, 18));
-        buyPrice = ethReceived > 0 ? spentAmount / ethReceived : Infinity;
-      }
-
-      // Price validation
-      if (pairName === "WBTC/USDC") {
-        if (sellPrice < 50000 || sellPrice > 80000) return null;
-        if (buyPrice < 50000 || buyPrice > 80000) return null;
-      } else if (pairName.includes("WETH")) {
-        if (sellPrice < 1500 || sellPrice > 5000) return null;
-        if (buyPrice < 1500 || buyPrice > 5000) return null;
+        buyPrice = ethReceived > 0 ? 1000 / ethReceived : Infinity;
       }
 
       if (sellPrice <= 0 || !isFinite(sellPrice)) return null;
       if (buyPrice <= 0 || !isFinite(buyPrice)) return null;
 
-      return {
-        dex: dexName,
-        sellPrice,
-        buyPrice,
-        sellAmountOut,
-        buyAmountOut,
-        fee: fee,
-      };
+      // If a single DEX's own sell/buy prices diverge by >5%, the pool is too
+      // thin for our trade sizes — the quote is dominated by slippage, not price.
+      const internalSpread = Math.abs(sellPrice - buyPrice) / Math.min(sellPrice, buyPrice);
+      if (internalSpread > 0.05) return null;
+
+      return { dex: dexName, sellPrice, buyPrice, sellAmountOut, buyAmountOut, fee };
     } catch (err) {
-      if (pairName === "WBTC/USDC") {
-        console.log(
-          `\x1b[31m❌ WBTC ${dexName} error: ${err.message.substring(0, 80)}\x1b[0m`,
-        );
-      }
       return null;
     }
   }
 
+  // Wraps each DEX call with an individual timeout so a hanging RPC can't stall the poll.
+  // The timer is cancelled as soon as the quote resolves, avoiding lingering handles.
   async getAllQuotes(chainName, pairName) {
     const dexNames = Object.keys(this.contracts[chainName] || {});
 
     const quotes = await Promise.all(
-      dexNames.map((dexName) => this.getDexQuote(chainName, pairName, dexName)),
+      dexNames.map(
+        (dexName) =>
+          new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(null), CONFIG.quoteTimeoutMs);
+            this.getDexQuote(chainName, pairName, dexName)
+              .then((result) => { clearTimeout(timer); resolve(result); })
+              .catch(() => { clearTimeout(timer); resolve(null); });
+          }),
+      ),
     );
 
     return quotes.filter(
-      (q) =>
-        q !== null &&
-        isFinite(q.sellPrice) &&
-        isFinite(q.buyPrice) &&
-        q.sellPrice > 0 &&
-        q.buyPrice > 0,
+      (q) => q !== null && isFinite(q.sellPrice) && isFinite(q.buyPrice) && q.sellPrice > 0 && q.buyPrice > 0,
     );
   }
 
-  async analyseArbitrage(chainName, pairName, quoteA, quoteB) {
+  // Synchronous: uses gas price pre-fetched at the start of each poll cycle.
+  estimateGasCostUSD(chainName, ethPriceUSD) {
+    const gasPriceWei = this._cachedGasPriceWei[chainName];
+    if (!gasPriceWei) return CONFIG.gasEstimateFallbackUSD;
+    const gasCostWei = gasPriceWei * CONFIG.estimatedGasUnits;
+    return Number(ethers.formatEther(gasCostWei)) * ethPriceUSD;
+  }
+
+  // Synchronous: all inputs (gas price, ETH price) are pre-fetched before this is called.
+  analyseArbitrage(chainName, pairName, quoteA, quoteB, ethPriceUSD = null) {
     const chain = CONFIG.chains[chainName];
     const pair = chain.pairs.find((p) => p.name === pairName);
-
     if (!pair) return null;
 
-    // Try both directions
     const buyOnA = quoteA.buyPrice < quoteB.buyPrice;
     const buyPrice = buyOnA ? quoteA.buyPrice : quoteB.buyPrice;
     const sellPrice = buyOnA ? quoteB.sellPrice : quoteA.sellPrice;
 
-    const tradeAmountETH = Number(ethers.formatEther(pair.amountIn));
-    const grossProfitUSD = (sellPrice - buyPrice) * tradeAmountETH;
-
+    const tradeAmount = Number(ethers.formatUnits(pair.amountIn, pair.decimalsIn));
+    const grossProfitUSD = (sellPrice - buyPrice) * tradeAmount;
     if (grossProfitUSD <= 0) return null;
 
     const spreadPct = ((sellPrice - buyPrice) / buyPrice) * 100;
-    const ethPriceUSD = (sellPrice + buyPrice) / 2;
+    const midPrice = (sellPrice + buyPrice) / 2;
+    // For WETH pairs midPrice IS the ETH price. For non-WETH (e.g. WBTC), the caller
+    // passes the cached ETH price so gas cost isn't computed using the asset price.
+    const gasEthPrice = ethPriceUSD ?? midPrice;
     const netGrossProfitUSD = grossProfitUSD * (1 - CONFIG.slippageBuffer);
 
-    // Calculate fees
     const buyFeeRate = (buyOnA ? quoteA.fee : quoteB.fee) / 1_000_000;
     const sellFeeRate = (buyOnA ? quoteB.fee : quoteA.fee) / 1_000_000;
-    const tradeValueUSD = ethPriceUSD * tradeAmountETH;
-    const totalSwapFeesUSD = tradeValueUSD * (buyFeeRate + sellFeeRate);
+    const totalSwapFeesUSD = midPrice * tradeAmount * (buyFeeRate + sellFeeRate);
 
-    const borrowedUSDC = buyPrice * tradeAmountETH;
-    const flashLoanFeeUSD = borrowedUSDC * CONFIG.morphoFeePercent;
-    const gasCostUSD = await this.estimateGasCostUSD(chainName, ethPriceUSD);
-
+    const flashLoanFeeUSD = buyPrice * tradeAmount * CONFIG.morphoFeePercent;
+    const gasCostUSD = this.estimateGasCostUSD(chainName, gasEthPrice);
     const totalCostsUSD = flashLoanFeeUSD + totalSwapFeesUSD + gasCostUSD;
     const netProfitUSD = netGrossProfitUSD - totalCostsUSD;
 
@@ -431,403 +488,162 @@ class PriceMonitor extends EventEmitter {
       gasCostUSD: gasCostUSD.toFixed(2),
       totalCostsUSD: totalCostsUSD.toFixed(2),
       netProfitUSD: netProfitUSD.toFixed(2),
-      isProfitable:
-        netProfitUSD > CONFIG.minNetProfitUSD &&
-        spreadPct >= CONFIG.minSpreadPercent,
+      isProfitable: netProfitUSD > CONFIG.minNetProfitUSD && spreadPct >= CONFIG.minSpreadPercent,
     };
   }
 
-  async estimateGasCostUSD(chainName, ethPriceUSD) {
-    try {
-      const provider = this.providers[chainName];
-      const feeData = await provider.getFeeData();
-      const gasPriceWei = feeData.gasPrice ?? feeData.maxFeePerGas;
-      if (!gasPriceWei) throw new Error("no gas price returned");
-      const gasCostWei = gasPriceWei * CONFIG.estimatedGasUnits;
-      const gasCostETH = Number(ethers.formatEther(gasCostWei));
-      return gasCostETH * ethPriceUSD;
-    } catch (err) {
-      return CONFIG.gasEstimateFallbackUSD;
-    }
-  }
-
-  // async poll() {
-  //   // Store all output for this poll cycle
-  //   let outputLines = [];
-
-  //   for (const [chainName, chain] of Object.entries(CONFIG.chains)) {
-  //     for (const pair of chain.pairs) {
-  //       if (!pair.enabled) continue;
-
-  //       const quotes = await this.getAllQuotes(chainName, pair.name);
-
-  //       if (quotes.length < 2) {
-  //         outputLines.push(
-  //           `\r\x1b[K\x1b[90m⏳ [${chainName}] ${pair.name}: Waiting for quotes...\x1b[0m`,
-  //         );
-  //         continue;
-  //       }
-
-  //       const validQuotes = quotes.filter(
-  //         (q) => q && q.sellPrice > 0 && q.buyPrice > 0,
-  //       );
-
-  //       if (validQuotes.length >= 2) {
-  //         const bestSell = Math.max(...validQuotes.map((q) => q.sellPrice));
-  //         const bestBuy = Math.min(...validQuotes.map((q) => q.buyPrice));
-  //         const spread = ((bestSell - bestBuy) / bestBuy) * 100;
-
-  //         // Check for opportunities
-  //         let opportunityFound = false;
-  //         for (let i = 0; i < validQuotes.length; i++) {
-  //           for (let j = i + 1; j < validQuotes.length; j++) {
-  //             const opportunity = await this.analyseArbitrage(
-  //               chainName,
-  //               pair.name,
-  //               validQuotes[i],
-  //               validQuotes[j],
-  //             );
-  //             if (opportunity && opportunity.isProfitable) {
-  //               opportunityFound = true;
-
-  //               if (
-  //                 this.opportunities.length >= CONFIG.maxOpportunitiesStored
-  //               ) {
-  //                 this.opportunities.splice(
-  //                   0,
-  //                   Math.floor(CONFIG.maxOpportunitiesStored / 2),
-  //                 );
-  //               }
-  //               this.opportunities.push(opportunity);
-  //               this.emit("opportunity", opportunity);
-
-  //               // Add opportunity line
-  //               outputLines.push(
-  //                 `\r\x1b[K\x1b[31m🚨 [${chainName}] ${pair.name} | PROFIT: $${opportunity.netProfitUSD} | ${opportunity.buyDex} → ${opportunity.sellDex} | Spread: ${opportunity.spreadPct}%\x1b[0m`,
-  //               );
-  //               break;
-  //             }
-  //           }
-  //           if (opportunityFound) break;
-  //         }
-
-  //         // Normal price display (no opportunity)
-  //         if (!opportunityFound && spread > -5 && spread < 5) {
-  //           let spreadColor = "\x1b[90m";
-  //           let spreadSymbol = "📊";
-  //           if (spread > 0.05) {
-  //             spreadSymbol = "📈";
-  //             spreadColor = "\x1b[32m";
-  //           } else if (spread < -0.05) {
-  //             spreadSymbol = "📉";
-  //             spreadColor = "\x1b[31m";
-  //           }
-
-  //           outputLines.push(
-  //             `\r\x1b[K${spreadSymbol} \x1b[36m[${chainName}]\x1b[0m \x1b[37m${pair.name.padEnd(12)}\x1b[0m | ` +
-  //               `Sell: \x1b[32m$${bestSell.toFixed(2).padStart(8)}\x1b[0m | ` +
-  //               `Buy: \x1b[31m$${bestBuy.toFixed(2).padStart(8)}\x1b[0m | ` +
-  //               `Spread: ${spreadColor}${spread.toFixed(3).padStart(8)}%\x1b[0m`,
-  //           );
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   // Move cursor up to the beginning of the output block
-  //   // Clear from current position to end of screen
-  //   process.stdout.write("\x1b[0J");
-
-  //   // Move cursor to top left
-  //   process.stdout.write("\x1b[H");
-
-  //   // Print header
-  //   console.log(
-  //     `\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-  //   );
-  //   console.log(`\x1b[33m🤖 Flash Loan Arbitrage Monitor\x1b[0m`);
-  //   console.log(
-  //     `\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-  //   );
-  //   console.log(
-  //     `\x1b[90mTime: ${new Date().toLocaleTimeString()} | Polling every ${CONFIG.pollIntervalMs / 1000}s\x1b[0m\n`,
-  //   );
-
-  //   // Print all current quotes
-  //   for (const line of outputLines) {
-  //     console.log(line);
-  //   }
-
-  //   // Print footer with stats
-  //   console.log(
-  //     `\n\x1b[90m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-  //   );
-  //   console.log(
-  //     `\x1b[90m📊 Last update: ${new Date().toLocaleTimeString()} | Opportunities found: ${this.opportunities.length}\x1b[0m`,
-  //   );
-  // }
   async poll() {
-    let outputLines = [];
-
-    for (const [chainName, chain] of Object.entries(CONFIG.chains)) {
-      for (const pair of chain.pairs) {
-        if (!pair.enabled) continue;
-
-        const quotes = await this.getAllQuotes(chainName, pair.name);
-
-        if (quotes.length < 2) {
-          outputLines.push(
-            `\r\x1b[K\x1b[90m⏳ [${chainName}] ${pair.name}: Waiting for quotes...\x1b[0m`,
-          );
-          continue;
-        }
-
-        const validQuotes = quotes.filter(
-          (q) => q && q.sellPrice > 0 && q.buyPrice > 0,
-        );
-
-        if (validQuotes.length >= 2) {
-          // Find the BEST cross-DEX arbitrage opportunity
-          let bestArbSpread = -Infinity;
-          let bestArbBuyDex = null;
-          let bestArbSellDex = null;
-          let bestArbBuyPrice = 0;
-          let bestArbSellPrice = 0;
-
-          // Check all DEX pairs for arbitrage
-          for (let i = 0; i < validQuotes.length; i++) {
-            for (let j = 0; j < validQuotes.length; j++) {
-              if (i === j) continue;
-
-              // Try buying on DEX i, selling on DEX j
-              const potentialProfit =
-                validQuotes[j].sellPrice - validQuotes[i].buyPrice;
-              const spread = (potentialProfit / validQuotes[i].buyPrice) * 100;
-
-              if (spread > bestArbSpread) {
-                bestArbSpread = spread;
-                bestArbBuyDex = validQuotes[i].dex;
-                bestArbSellDex = validQuotes[j].dex;
-                bestArbBuyPrice = validQuotes[i].buyPrice;
-                bestArbSellPrice = validQuotes[j].sellPrice;
-              }
-            }
+    // ── Phase 1: refresh gas prices and fetch all quotes in parallel ─────────────
+    //
+    // Gas prices and quotes are independent — run concurrently.
+    // Quotes are also fully parallel across all chains and pairs.
+    const [, allPairData] = await Promise.all([
+      Promise.all(
+        Object.keys(CONFIG.chains).map(async (chainName) => {
+          try {
+            const feeData = await this.providers[chainName].getFeeData();
+            this._cachedGasPriceWei[chainName] = feeData.gasPrice ?? feeData.maxFeePerGas ?? null;
+          } catch {
+            // keep last cached value; estimateGasCostUSD falls back to gasEstimateFallbackUSD
           }
+        }),
+      ),
+      Promise.all(
+        Object.entries(CONFIG.chains).flatMap(([chainName, chain]) =>
+          chain.pairs
+            .filter((p) => p.enabled)
+            .map(async (pair) => ({
+              chainName,
+              pair,
+              quotes: await this.getAllQuotes(chainName, pair.name),
+            })),
+        ),
+      ),
+    ]);
 
-          // Also find best individual DEX prices (for reference)
-          const bestSellPrice = Math.max(
-            ...validQuotes.map((q) => q.sellPrice),
-          );
-          const bestSellDex = validQuotes.find(
-            (q) => q.sellPrice === bestSellPrice,
-          )?.dex;
-          const bestBuyPrice = Math.min(...validQuotes.map((q) => q.buyPrice));
-          const bestBuyDex = validQuotes.find(
-            (q) => q.buyPrice === bestBuyPrice,
-          )?.dex;
-
-          // Determine if there's an arbitrage opportunity (positive spread)
-          const isArbOpportunity = bestArbSpread > 0.05; // >0.05% spread
-
-          if (isArbOpportunity) {
-            // Show ARBITRAGE OPPORTUNITY prominently
-            outputLines.push(
-              `\r\x1b[K\x1b[31m🚨 [${chainName}] ${pair.name} | ARBITRAGE: Buy on ${bestArbBuyDex} @ $${bestArbBuyPrice.toFixed(2)} → Sell on ${bestArbSellDex} @ $${bestArbSellPrice.toFixed(2)} | Profit: ${bestArbSpread.toFixed(3)}%\x1b[0m`,
-            );
-
-            // Also check if this opportunity meets your threshold
-            const tradeAmountETH = Number(ethers.formatEther(pair.amountIn));
-            const grossProfitUSD =
-              (bestArbSellPrice - bestArbBuyPrice) * tradeAmountETH;
-
-            if (grossProfitUSD > CONFIG.minNetProfitUSD) {
-              // Trigger execution engine
-              this.emit("opportunity", {
-                chain: chainName,
-                pair: pair.name,
-                buyDex: bestArbBuyDex,
-                sellDex: bestArbSellDex,
-                buyPrice: bestArbBuyPrice,
-                sellPrice: bestArbSellPrice,
-                spreadPct: bestArbSpread,
-                grossProfitUSD: grossProfitUSD,
-              });
-            }
-          } else {
-            // Show normal market status (no arbitrage)
-            let spreadColor = "\x1b[90m";
-            let spreadSymbol = "📊";
-
-            // Show the best individual prices across DEXs
-            outputLines.push(
-              `\r\x1b[K${spreadSymbol} \x1b[36m[${chainName}]\x1b[0m \x1b[37m${pair.name.padEnd(12)}\x1b[0m | ` +
-                `Best Sell: \x1b[32m${bestSellDex?.padEnd(12)} $${bestSellPrice.toFixed(2)}\x1b[0m | ` +
-                `Best Buy: \x1b[31m${bestBuyDex?.padEnd(12)} $${bestBuyPrice.toFixed(2)}\x1b[0m | ` +
-                `Cross-DEX Spread: ${spreadColor}${bestArbSpread.toFixed(3)}%\x1b[0m`,
-            );
-
-            // Also show the best same-DEX spread for reference
-            const bestSameDexSpread = Math.max(
-              ...validQuotes.map(
-                (q) => ((q.sellPrice - q.buyPrice) / q.buyPrice) * 100,
-              ),
-            );
-            if (bestSameDexSpread > -0.5) {
-              outputLines.push(
-                `\r\x1b[K\x1b[90m   └─ Best same-DEX spread: ${bestSameDexSpread.toFixed(3)}% (not arbitrageable)\x1b[0m`,
-              );
-            }
-          }
-        }
+    // ── Phase 2: warm per-chain ETH price cache from WETH pair results ───────────
+    //
+    // Must complete before Phase 3 so WBTC analysis uses ETH price, not WBTC price,
+    // for gas cost estimation. Doing this as a separate pass avoids the race condition
+    // that would appear if we updated the cache while other pairs were running.
+    for (const { chainName, pair, quotes } of allPairData) {
+      if (pair.name.includes("WETH") && quotes.length >= 1) {
+        const midPrices = quotes.map((q) => (q.sellPrice + q.buyPrice) / 2);
+        this._ethPriceUSD[chainName] = midPrices.reduce((a, b) => a + b, 0) / midPrices.length;
       }
     }
 
-    // Clear and display
-    process.stdout.write("\x1b[0J");
-    process.stdout.write("\x1b[H");
+    // ── Phase 3: analyse each pair and build output lines ────────────────────────
+    const outputLines = [];
 
-    console.log(
-      `\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-    );
+    for (const { chainName, pair, quotes } of allPairData) {
+      if (quotes.length < 2) {
+        const total = Object.keys(this.contracts[chainName] || {}).length;
+        const msg =
+          quotes.length === 0
+            ? `\x1b[31m❌ [${chainName}] ${pair.name}: All ${total} DEX quotes failed\x1b[0m`
+            : `\x1b[90m⚠️  [${chainName}] ${pair.name}: ${quotes.length}/${total} DEX quoted — need ≥2\x1b[0m`;
+        outputLines.push(`\r\x1b[K${msg}`);
+        continue;
+      }
+
+      const ethPrice = this._ethPriceUSD[chainName] ?? null;
+
+      // analyseArbitrage is now synchronous — no await needed inside this loop
+      let bestOpportunity = null;
+      for (let i = 0; i < quotes.length; i++) {
+        for (let j = i + 1; j < quotes.length; j++) {
+          const opp = this.analyseArbitrage(chainName, pair.name, quotes[i], quotes[j], ethPrice);
+          if (!opp) continue;
+          if (!bestOpportunity || parseFloat(opp.netProfitUSD) > parseFloat(bestOpportunity.netProfitUSD)) {
+            bestOpportunity = opp;
+          }
+        }
+      }
+
+      // Always compute raw best prices for display (used in both the no-opp and non-profitable branches)
+      const bestSell = Math.max(...quotes.map((q) => q.sellPrice));
+      const bestSellDex = quotes.find((q) => q.sellPrice === bestSell)?.dex;
+      const bestBuy = Math.min(...quotes.map((q) => q.buyPrice));
+      const bestBuyDex = quotes.find((q) => q.buyPrice === bestBuy)?.dex;
+
+      if (!bestOpportunity) {
+        // No positive gross spread in any direction — show raw prices
+        const crossSpread = ((bestSell - bestBuy) / bestBuy) * 100;
+        outputLines.push(
+          `\r\x1b[K📊 \x1b[36m[${chainName}]\x1b[0m \x1b[37m${pair.name.padEnd(12)}\x1b[0m | ` +
+            `Best Sell: \x1b[32m${bestSellDex?.padEnd(12)} $${bestSell.toFixed(2)}\x1b[0m | ` +
+            `Best Buy: \x1b[31m${bestBuyDex?.padEnd(12)} $${bestBuy.toFixed(2)}\x1b[0m | ` +
+            `Spread: \x1b[90m${crossSpread.toFixed(3)}%\x1b[0m`,
+        );
+        continue;
+      }
+
+      if (bestOpportunity.isProfitable) {
+        // Cooldown: re-emit the same direction at most once per oppCooldownMs.
+        // Prevents flooding the execution engine when an opportunity persists across polls.
+        const oppKey = `${bestOpportunity.chain}:${bestOpportunity.pair}:${bestOpportunity.buyDex}:${bestOpportunity.sellDex}`;
+        if (Date.now() - (this._lastEmitted[oppKey] ?? 0) > CONFIG.oppCooldownMs) {
+          this._lastEmitted[oppKey] = Date.now();
+          if (this.opportunities.length >= CONFIG.maxOpportunitiesStored) {
+            this.opportunities.splice(0, Math.floor(CONFIG.maxOpportunitiesStored / 2));
+          }
+          this.opportunities.push(bestOpportunity);
+          this.emit("opportunity", bestOpportunity);
+        }
+
+        outputLines.push(
+          `\r\x1b[K\x1b[31m🚨 [${chainName}] ${pair.name} | NET: $${bestOpportunity.netProfitUSD} | ` +
+            `${bestOpportunity.buyDex} @ $${bestOpportunity.buyPrice} → ${bestOpportunity.sellDex} @ $${bestOpportunity.sellPrice} | ` +
+            `Spread: ${bestOpportunity.spreadPct}% | Gas: $${bestOpportunity.gasCostUSD}\x1b[0m`,
+        );
+      } else {
+        outputLines.push(
+          `\r\x1b[K📊 \x1b[36m[${chainName}]\x1b[0m \x1b[37m${pair.name.padEnd(12)}\x1b[0m | ` +
+            `Best Sell: \x1b[32m${bestSellDex?.padEnd(12)} $${bestSell.toFixed(2)}\x1b[0m | ` +
+            `Best Buy: \x1b[31m${bestBuyDex?.padEnd(12)} $${bestBuy.toFixed(2)}\x1b[0m | ` +
+            `Spread: \x1b[90m${bestOpportunity.spreadPct}%\x1b[0m`,
+        );
+      }
+    }
+
+    // ── Render ───────────────────────────────────────────────────────────────────
+    // Screen-clear escape codes only work in an interactive terminal. In PM2, Docker,
+    // or piped output they produce garbage — skip them and let each poll print a block.
+    if (process.stdout.isTTY) {
+      process.stdout.write("\x1b[0J");
+      process.stdout.write("\x1b[H");
+    }
+
+    console.log(`\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`);
     console.log(`\x1b[33m🤖 Flash Loan Arbitrage Monitor\x1b[0m`);
-    console.log(
-      `\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-    );
-    console.log(
-      `\x1b[90mTime: ${new Date().toLocaleTimeString()} | Polling every ${CONFIG.pollIntervalMs / 1000}s\x1b[0m\n`,
-    );
+    console.log(`\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`);
+    console.log(`\x1b[90mTime: ${new Date().toLocaleTimeString()} | Polling every ${CONFIG.pollIntervalMs / 1000}s\x1b[0m\n`);
 
     for (const line of outputLines) {
       console.log(line);
     }
 
-    console.log(
-      `\n\x1b[90m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-    );
-    console.log(
-      `\x1b[90m📊 Last update: ${new Date().toLocaleTimeString()}\x1b[0m`,
-    );
+    console.log(`\n\x1b[90m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`);
+    console.log(`\x1b[90m📊 Last update: ${new Date().toLocaleTimeString()} | Opportunities: ${this.opportunities.length}\x1b[0m`);
   }
-  // async poll() {
-  //   let outputLines = [];
 
-  //   for (const [chainName, chain] of Object.entries(CONFIG.chains)) {
-  //     for (const pair of chain.pairs) {
-  //       if (!pair.enabled) continue;
-
-  //       const quotes = await this.getAllQuotes(chainName, pair.name);
-
-  //       if (quotes.length < 2) {
-  //         outputLines.push(
-  //           `\r\x1b[K\x1b[90m⏳ [${chainName}] ${pair.name}: Waiting for quotes...\x1b[0m`,
-  //         );
-  //         continue;
-  //       }
-
-  //       const validQuotes = quotes.filter(
-  //         (q) => q && q.sellPrice > 0 && q.buyPrice > 0,
-  //       );
-
-  //       if (validQuotes.length >= 2) {
-  //         // 🔍 DEBUG: Show all DEX quotes for Base WETH/USDC
-  //         if (pair.name === "WETH/USDC" && chainName === "base") {
-  //           console.log(
-  //             `\n\x1b[33m📊 Detailed quotes for ${chainName} ${pair.name}:\x1b[0m`,
-  //           );
-  //           validQuotes.forEach((q) => {
-  //             const sameDexSpread =
-  //               ((q.sellPrice - q.buyPrice) / q.buyPrice) * 100;
-  //             console.log(
-  //               `   ${q.dex.padEnd(15)} | Sell: $${q.sellPrice.toFixed(2)} | Buy: $${q.buyPrice.toFixed(2)} | Spread: ${sameDexSpread.toFixed(3)}%`,
-  //             );
-  //           });
-  //         }
-
-  //         // Find the BEST cross-DEX arbitrage opportunity
-  //         let bestArbSpread = -Infinity;
-  //         let bestArbBuyDex = null;
-  //         let bestArbSellDex = null;
-  //         let bestArbBuyPrice = 0;
-  //         let bestArbSellPrice = 0;
-
-  //         // Check all DEX pairs for arbitrage
-  //         for (let i = 0; i < validQuotes.length; i++) {
-  //           for (let j = 0; j < validQuotes.length; j++) {
-  //             if (i === j) continue;
-
-  //             const potentialProfit =
-  //               validQuotes[j].sellPrice - validQuotes[i].buyPrice;
-  //             const spread = (potentialProfit / validQuotes[i].buyPrice) * 100;
-
-  //             if (spread > bestArbSpread) {
-  //               bestArbSpread = spread;
-  //               bestArbBuyDex = validQuotes[i].dex;
-  //               bestArbSellDex = validQuotes[j].dex;
-  //               bestArbBuyPrice = validQuotes[i].buyPrice;
-  //               bestArbSellPrice = validQuotes[j].sellPrice;
-  //             }
-  //           }
-  //         }
-
-  //         // Find best individual DEX prices
-  //         const bestSellPrice = Math.max(
-  //           ...validQuotes.map((q) => q.sellPrice),
-  //         );
-  //         const bestSellDex = validQuotes.find(
-  //           (q) => q.sellPrice === bestSellPrice,
-  //         )?.dex;
-  //         const bestBuyPrice = Math.min(...validQuotes.map((q) => q.buyPrice));
-  //         const bestBuyDex = validQuotes.find(
-  //           (q) => q.buyPrice === bestBuyPrice,
-  //         )?.dex;
-
-  //         const isArbOpportunity = bestArbSpread > 0.05;
-
-  //         if (isArbOpportunity) {
-  //           outputLines.push(
-  //             `\r\x1b[K\x1b[31m🚨 [${chainName}] ${pair.name} | ARBITRAGE: Buy on ${bestArbBuyDex} @ $${bestArbBuyPrice.toFixed(2)} → Sell on ${bestArbSellDex} @ $${bestArbSellPrice.toFixed(2)} | Profit: ${bestArbSpread.toFixed(3)}%\x1b[0m`,
-  //           );
-  //         } else {
-  //           let spreadColor = "\x1b[90m";
-  //           let spreadSymbol = "📊";
-
-  //           outputLines.push(
-  //             `\r\x1b[K${spreadSymbol} \x1b[36m[${chainName}]\x1b[0m \x1b[37m${pair.name.padEnd(12)}\x1b[0m | ` +
-  //               `Best Sell: ${bestSellDex?.padEnd(12)} $${bestSellPrice.toFixed(2)} | ` +
-  //               `Best Buy: ${bestBuyDex?.padEnd(12)} $${bestBuyPrice.toFixed(2)} | ` +
-  //               `Cross-DEX Spread: ${spreadColor}${bestArbSpread.toFixed(3)}%\x1b[0m`,
-  //           );
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   // Clear and display
-  //   process.stdout.write("\x1b[0J");
-  //   process.stdout.write("\x1b[H");
-
-  //   console.log(
-  //     `\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-  //   );
-  //   console.log(`\x1b[33m🤖 Flash Loan Arbitrage Monitor\x1b[0m`);
-  //   console.log(
-  //     `\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-  //   );
-  //   console.log(
-  //     `\x1b[90mTime: ${new Date().toLocaleTimeString()} | Polling every ${CONFIG.pollIntervalMs / 1000}s\x1b[0m\n`,
-  //   );
-
-  //   for (const line of outputLines) {
-  //     console.log(line);
-  //   }
-
-  //   console.log(
-  //     `\n\x1b[90m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m`,
-  //   );
-  //   console.log(
-  //     `\x1b[90m📊 Last update: ${new Date().toLocaleTimeString()}\x1b[0m`,
-  //   );
-  // }
+  // setTimeout-based scheduling: the next poll is only queued AFTER the current one
+  // finishes, preventing polls from stacking up if one takes longer than pollIntervalMs.
+  // Adaptive delay: if a poll takes 2s on a 3s interval, the next fires in 1s, not 3s.
+  async _runPoll() {
+    if (!this.running) return;
+    const start = Date.now();
+    try {
+      await this.poll();
+    } catch (err) {
+      console.error("❌ Poll error:", err.message);
+    }
+    if (this.running) {
+      const elapsed = Date.now() - start;
+      this._pollTimer = setTimeout(() => this._runPoll(), Math.max(0, CONFIG.pollIntervalMs - elapsed));
+    }
+  }
 
   async start() {
     await this.init();
@@ -846,26 +662,12 @@ class PriceMonitor extends EventEmitter {
       `👀 Monitoring ${totalDEXs} DEXs across ${Object.keys(CONFIG.chains).length} chains with ${enabledPairs} pairs every ${CONFIG.pollIntervalMs / 1000}s...\n`,
     );
 
-    this._pollInterval = setInterval(async () => {
-      if (!this.running) return;
-      try {
-        await this.poll();
-      } catch (err) {
-        console.error("  ❌ Poll error:", err.message);
-      }
-    }, CONFIG.pollIntervalMs);
-
-    // Run one poll immediately
-    try {
-      await this.poll();
-    } catch (err) {
-      console.error("  ❌ Initial poll error:", err.message);
-    }
+    this._runPoll();
   }
 
   stop() {
     this.running = false;
-    if (this._pollInterval) clearInterval(this._pollInterval);
+    if (this._pollTimer) clearTimeout(this._pollTimer);
     console.log("\n🛑 Monitor stopped.");
   }
 }
@@ -880,3 +682,4 @@ if (require.main === module) {
     process.exit(0);
   });
 }
+``
