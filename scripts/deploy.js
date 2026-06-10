@@ -5,11 +5,11 @@ const path = require("path");
 async function main() {
   console.log("Deploying FlashLoanArb contract...\n");
 
-  // Morpho Blue addresses (update for your chain)
+  // Morpho Blue addresses (same on all supported chains)
   const MORPHO_ADDRESSES = {
-    base: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa", // Morpho Blue on Base
-    ethereum: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa", // Morpho Blue on Ethereum
-    arbitrum: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa", // Morpho Blue on Arbitrum
+    base: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
+    ethereum: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
+    arbitrum: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
   };
 
   // Get the network name
@@ -29,11 +29,11 @@ async function main() {
   console.log(`📍 Morpho Blue address: ${morphoAddress}`);
 
   // Get the contract factory
-  const FlashLoanArb = await hre.ethers.getContractFactory("FlashLoanArb");
+  const FlashLoanArbitrage = await hre.ethers.getContractFactory("FlashLoanArbitrage");
 
   // Deploy the contract
-  console.log("🚀 Deploying FlashLoanArb...");
-  const contract = await FlashLoanArb.deploy(morphoAddress);
+  console.log("🚀 Deploying FlashLoanArbitrage...");
+  const contract = await FlashLoanArbitrage.deploy(morphoAddress);
 
   await contract.waitForDeployment();
   const contractAddress = await contract.getAddress();

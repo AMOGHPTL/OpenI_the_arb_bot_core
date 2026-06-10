@@ -12,22 +12,23 @@ contract DeployFlashLoanArb is Script {
     address constant MORPHO = 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb;
 
     // -------------------------------------------------------------------------
-    // Uniswap V3 SwapRouter
+    // Uniswap V3 SwapRouter02 (no `deadline` in ExactInputSingleParams).
+    // Do NOT use SwapRouter01 (0xE592427A...) — it uses a different ABI struct.
     // -------------------------------------------------------------------------
-    address constant UNISWAP_BASE     = 0x2626664c2603336E57B271c5C0b26F421741e481;
-    address constant UNISWAP_ETH      = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
-    address constant UNISWAP_ARBITRUM = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address constant UNISWAP_BASE     = 0x2626664c2603336E57B271c5C0b26F421741e481; // SwapRouter02
+    address constant UNISWAP_ETH      = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45; // SwapRouter02
+    address constant UNISWAP_ARBITRUM = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45; // SwapRouter02
 
     // -------------------------------------------------------------------------
-    // Second DEX (UniV2-compatible)
-    // NOTE: SushiSwap V2 is NOT deployed on Base.
-    //   Base      → Aerodrome  (UniV2-compatible)
+    // Second DEX — must be UniV2-compatible (address[] path interface).
+    // Aerodrome uses Route[] struct and is NOT compatible with IUniV2Router.
+    //   Base      → Uniswap V2  (0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24)
     //   Ethereum  → SushiSwap V2
     //   Arbitrum  → SushiSwap V2
     // -------------------------------------------------------------------------
-    address constant DEX2_BASE     = 0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43; // Aerodrome
+    address constant DEX2_BASE     = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24; // Uniswap V2
     address constant DEX2_ETH      = 0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F; // SushiSwap V2
-    address constant DEX2_ARBITRUM = 0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506; // SushiSwap V2 Arbitrum
+    address constant DEX2_ARBITRUM = 0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506; // SushiSwap V2
 
     function run() external {
         string memory network = vm.envOr("NETWORK", string("base"));

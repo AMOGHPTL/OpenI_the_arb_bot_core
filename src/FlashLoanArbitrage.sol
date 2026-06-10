@@ -4,16 +4,19 @@ pragma solidity ^0.8.0;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IMorpho} from "./interfaces/IMorpho.sol";
 import {IMorphoFlashLoanCallback} from "./interfaces/IMorphoCallbacks.sol";
 
+// Matches SwapRouter02 ABI (no deadline field — selector 0x04e45aaf).
+// SwapRouter01 has an extra `deadline` field and produces selector 0x414bf389 which
+// SwapRouter02 does NOT recognise. Deadline protection is handled in _initiateFlashLoan.
 interface ISwapRouter {
     struct ExactInputSingleParams {
         address tokenIn;
         address tokenOut;
         uint24 fee;
         address recipient;
-        uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
         uint160 sqrtPriceLimitX96;
@@ -31,7 +34,7 @@ interface IUniV2Router {
     ) external returns (uint256[] memory amounts);
 }
 
-contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
+contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IMorpho public immutable MORPHO;
@@ -45,6 +48,7 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
     event TokensRescued(address indexed token, uint256 amount);
     event ETHRescued(uint256 amount);
     event FlashLoanInitiated(address indexed token, uint256 amount);
+    event ApprovalRevoked(address indexed token, address indexed spender);
 
     struct ArbitrageData {
         address tokenBorrowed;
@@ -81,17 +85,18 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
     //
     // Ethereum mainnet
     //   Morpho Blue:   0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
-    //   Uniswap V3:    0xE592427A0AEce92De3Edee1F18E0157C05861564
+    //   Uniswap V3:    0xE592427A0AEce92De3Edee1F18E0157C05861564  (SwapRouter01 — has deadline)
     //   SushiSwap V2:  0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F
     //
     // Base mainnet
     //   Morpho Blue:   0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
-    //   Uniswap V3:    0x2626664c2603336E57B271c5C0b26F421741e481
-    //   Aerodrome:     0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24
+    //   Uniswap V3:    0x2626664c2603336E57B271c5C0b26F421741e481  (SwapRouter02 — no deadline)
+    //   Uniswap V2:    0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24  (UniV2-compatible)
+    //   NOTE: Aerodrome (0xcF77a3...) uses Route[] struct, NOT address[] — incompatible with IUniV2Router
     //
     // Arbitrum
     //   Morpho Blue:   0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
-    //   Uniswap V3:    0xE592427A0AEce92De3Edee1F18E0157C05861564
+    //   Uniswap V3:    0xE592427A0AEce92De3Edee1F18E0157C05861564  (SwapRouter01 — has deadline)
     //   SushiSwap V2:  0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506
     constructor(address _morpho, address _uniswapRouter, address _sushiRouter) Ownable(msg.sender) {
         if (_morpho == address(0)) revert InvalidMorphoAddress();
@@ -202,7 +207,7 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
         MORPHO.flashLoan(token, amount, data);
     }
 
-    function onMorphoFlashLoan(uint256 amount, bytes calldata data) external override {
+    function onMorphoFlashLoan(uint256 amount, bytes calldata data) external override nonReentrant {
         if (msg.sender != address(MORPHO)) revert OnlyMorpho();
 
         ArbitrageData memory arbData = abi.decode(data, (ArbitrageData));
@@ -225,7 +230,6 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
 
         uint256 totalRepayment = amount;
         if (finalBalance < startingBalance) revert InsufficientRepayment();
-
         uint256 tradeBalance;
         unchecked {
             tradeBalance = finalBalance - startingBalance;
@@ -250,7 +254,6 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
             arbData.uniswapFee,
             amount,
             arbData.minAmountOutFirst,
-            arbData.deadline,
             arbData.uniswapSqrtPriceLimitX96
         );
 
@@ -276,7 +279,6 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
             arbData.uniswapFee,
             intermediateAmount,
             arbData.minAmountOutSecond,
-            arbData.deadline,
             arbData.uniswapSqrtPriceLimitX96
         );
 
@@ -289,7 +291,6 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
         uint24 fee,
         uint256 amountIn,
         uint256 minAmountOut,
-        uint256 deadline,
         uint160 sqrtPriceLimitX96
     ) internal returns (uint256 amountOut) {
         address router = address(UNISWAP_ROUTER);
@@ -300,7 +301,6 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
             tokenOut: tokenOut,
             fee: fee,
             recipient: address(this),
-            deadline: deadline,
             amountIn: amountIn,
             amountOutMinimum: minAmountOut,
             sqrtPriceLimitX96: sqrtPriceLimitX96
@@ -338,6 +338,13 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable {
             s_isMaxApproved[token][spender] = true;
             IERC20(token).forceApprove(spender, type(uint256).max);
         }
+    }
+
+    function revokeApproval(address token, address spender) external onlyOwner {
+        if (token == address(0) || spender == address(0)) revert ZeroAddress();
+        s_isMaxApproved[token][spender] = false;
+        IERC20(token).forceApprove(spender, 0);
+        emit ApprovalRevoked(token, spender);
     }
 
     function withdrawProfit(address token) external onlyOwner {

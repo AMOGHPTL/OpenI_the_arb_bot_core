@@ -146,6 +146,34 @@ contract FlashLoanArbitrageTest is Test {
         );
     }
 
+    function testInitiateFlashLoanRevertsZeroMinAmounts() public {
+        vm.expectRevert(FlashLoanArbitrage.ZeroAmount.selector);
+        arbitrage.initiateFlashLoan(address(usdc), 100e6, address(weth), 3000, 0, 0, 0, 1, block.timestamp + 1 hours);
+    }
+
+    function testInitiateFlashLoanRevertsInvalidDirection() public {
+        vm.expectRevert(FlashLoanArbitrage.InvalidDirection.selector);
+        arbitrage.initiateFlashLoan(address(usdc), 100e6, address(weth), 3000, 0, 2, 1, 1, block.timestamp + 1 hours);
+    }
+
+    function testSuccessfulArbitrageSushiToUni() public {
+        uni.setMultiplier(110);
+        sushi.setMultiplier(110);
+
+        arbitrage.initiateFlashLoan(address(usdc), 1000e6, address(weth), 3000, 1, 1, 1, 1, block.timestamp + 1 hours);
+
+        assertGt(usdc.balanceOf(address(arbitrage)), 0);
+    }
+
+    function testRevokeApproval() public {
+        uni.setMultiplier(110);
+        sushi.setMultiplier(110);
+        arbitrage.initiateFlashLoan(address(usdc), 1000e6, address(weth), 3000, 1, 0, 1, 1, block.timestamp + 1 hours);
+
+        arbitrage.revokeApproval(address(usdc), address(uni));
+        assertEq(usdc.allowance(address(arbitrage), address(uni)), 0);
+    }
+
     function testExistingBalanceDoesNotMaskBadTrade() public {
         usdc.mint(address(arbitrage), 1000e6);
         uni.setMultiplier(100);
