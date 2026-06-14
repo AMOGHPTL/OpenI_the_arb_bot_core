@@ -4,6 +4,10 @@
  */
 
 const { ethers } = require("ethers");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const readline = require("readline");
 const { PriceMonitor, CONFIG } = require("./priceMonitor");
 
 // ─── YOUR DEPLOYED CONTRACT ADDRESS ───────────────────────────────────────────
@@ -12,7 +16,56 @@ const CONTRACTS = {
   ethereum: process.env.CONTRACT_ETH || "0xYOUR_ETH_CONTRACT_ADDRESS",
 };
 
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
+// ─── Signer source ────────────────────────────────────────────────────────────
+// Preferred: decrypt the encrypted Foundry/cast keystore at startup so the private
+// key is never stored in plaintext. The keystore is a standard Web3 Secret Storage
+// JSON that ethers can decrypt directly.
+//   KEYSTORE_ACCOUNT  name under ~/.foundry/keystores (default "mywallet")
+//   KEYSTORE_PATH     explicit path to a keystore JSON (overrides KEYSTORE_ACCOUNT)
+// Fallback (discouraged): PRIVATE_KEY in plaintext, used only if no keystore exists.
+const KEYSTORE_ACCOUNT = process.env.KEYSTORE_ACCOUNT || "mywallet";
+const KEYSTORE_PATH =
+  process.env.KEYSTORE_PATH ||
+  path.join(os.homedir(), ".foundry", "keystores", KEYSTORE_ACCOUNT);
+
+// Prompt for a password without echoing it to the terminal.
+function promptHiddenPassword(query) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    // Mute output so typed characters aren't shown.
+    rl._writeToOutput = (str) => {
+      if (str.includes("\n") || str.includes("\r")) process.stdout.write(str);
+      else process.stdout.write("*");
+    };
+    process.stdout.write(query);
+    rl.question("", (answer) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolve(answer);
+    });
+  });
+}
+
+// Returns an unconnected ethers.Wallet, decrypted from the keystore (preferred)
+// or built from a plaintext PRIVATE_KEY (fallback). Throws if neither is available.
+async function loadSigner() {
+  if (fs.existsSync(KEYSTORE_PATH)) {
+    const json = fs.readFileSync(KEYSTORE_PATH, "utf8");
+    const password =
+      process.env.KEYSTORE_PASSWORD ||
+      (await promptHiddenPassword(`🔐 Unlock keystore '${KEYSTORE_ACCOUNT}': `));
+    const wallet = await ethers.Wallet.fromEncryptedJson(json, password);
+    console.log(`✅ Wallet unlocked from keystore: ${wallet.address}`);
+    return wallet;
+  }
+  if (process.env.PRIVATE_KEY) {
+    console.warn("⚠️ Using plaintext PRIVATE_KEY — prefer an encrypted keystore.");
+    return new ethers.Wallet(process.env.PRIVATE_KEY);
+  }
+  throw new Error(
+    `❌ No signer: keystore not found at ${KEYSTORE_PATH} and PRIVATE_KEY not set`,
+  );
+}
 
 // ─── Flash Loan Contract ABI (Morpho version) ───────────────────────────────────
 const FLASH_LOAN_ABI = [
@@ -51,9 +104,8 @@ class ExecutionEngine {
   }
 
   async init() {
-    if (!WALLET_PRIVATE_KEY) {
-      throw new Error("❌ PRIVATE_KEY env variable not set");
-    }
+    // Decrypt the keystore once, then connect the same signer to each chain.
+    const signer = await loadSigner();
 
     for (const [chainName, chainCfg] of Object.entries(CONFIG.chains)) {
       let rpcUrl = chainCfg.rpc;
@@ -64,7 +116,7 @@ class ExecutionEngine {
       }
 
       const provider = new ethers.JsonRpcProvider(rpcUrl);
-      const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+      const wallet = signer.connect(provider);
       this.wallets[chainName] = wallet;
 
       if (CONTRACTS[chainName] && !CONTRACTS[chainName].includes("YOUR_")) {
