@@ -10,6 +10,8 @@ optimizer_runs = 10000
 # Cancun enables EIP-1153 transient storage (ReentrancyGuardTransient).
 # Base has been on Cancun since March 2024.
 evm_version = "cancun"
+# Deploy script writes deployments/<network>.json; forge denies fs access by default.
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 [invariant]
 runs  = 256   # number of fuzzing campaigns

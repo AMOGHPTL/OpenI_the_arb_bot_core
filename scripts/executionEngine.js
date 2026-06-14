@@ -119,7 +119,10 @@ class ExecutionEngine {
       const wallet = signer.connect(provider);
       this.wallets[chainName] = wallet;
 
-      if (CONTRACTS[chainName] && !CONTRACTS[chainName].includes("YOUR_")) {
+      // Only wire a contract for chains with a real deployed address. This
+      // skips placeholders like "0x..." or "0xYOUR_..." cleanly, so an
+      // undeployed chain never triggers execution attempts against a bad target.
+      if (ethers.isAddress(CONTRACTS[chainName])) {
         this.contracts[chainName] = new ethers.Contract(
           CONTRACTS[chainName],
           FLASH_LOAN_ABI,
@@ -129,7 +132,7 @@ class ExecutionEngine {
           `✅ Connected to ${chainName} contract at ${CONTRACTS[chainName]}`,
         );
       } else {
-        console.warn(`⚠️ No contract deployed for ${chainName} — skipping`);
+        console.warn(`⚠️ No contract deployed for ${chainName} — skipping execution`);
       }
     }
   }
