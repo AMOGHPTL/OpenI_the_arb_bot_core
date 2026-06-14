@@ -41,7 +41,9 @@ Every **3 seconds** (`pollIntervalMs`), the monitor runs a poll cycle in three p
 
 **Phase 2 — ETH price cache.** It derives the current ETH price in USD from the WETH/USDC quotes, used later to convert gas cost into USD.
 
-**Phase 3 — Profit analysis.** For every pair it compares all DEX quotes against each other. If one DEX sells cheaper than another buys, there is a spread. It computes **net profit** after deducting swap fees on both legs, the Morpho flash-loan fee (0.05%), estimated gas in USD, and a 0.5% slippage buffer.
+**Phase 3 — Profit analysis.** For every pair it compares all DEX quotes against each other. If one DEX sells cheaper than another buys, there is a spread. It computes **net profit** after deducting swap fees on both legs, a 0.05% flash-loan buffer (`morphoFeePercent`), estimated gas in USD, and a 0.5% slippage buffer.
+
+> **Note on the flash-loan fee:** Morpho Blue flash loans are **free** — `flashFee` is zero, and the contract repays exactly the borrowed `amount` with no fee added. The monitor's `morphoFeePercent` (0.05%) is therefore a deliberately conservative safety margin baked into the profit math, **not** a real on-chain cost.
 
 If net profit exceeds `minNetProfitUSD` ($1) and spread exceeds `minSpreadPercent` (0.1%), it emits an `"opportunity"` event. A 30-second per-direction-per-pair cooldown (`oppCooldownMs`) prevents flooding the execution engine on every poll.
 
@@ -72,6 +74,7 @@ When it receives an `"opportunity"` event:
 - The spread still meets the minimum
 
 **Step 2 — Build on-chain parameters.**
+- `amount` — the flash-loan size. Currently **hardcoded to 1 unit of `tokenIn`** (`parseUnits("1", decimalsIn)`); the `minLoanAmount` values in `EXEC_CONFIG` are defined but **not yet wired into sizing**.
 - `minAmountOutFirst` / `minAmountOutSecond` — minimum output per leg, computed with BigInt at native precision and 0.5% slippage tolerance
 - `minProfit` — minimum round-trip profit in `tokenBorrowed` units, derived directly from expected swap outputs minus the loan (no USD conversion)
 - A 2-minute `deadline`
