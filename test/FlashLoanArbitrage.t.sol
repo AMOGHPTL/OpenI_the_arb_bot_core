@@ -174,6 +174,28 @@ contract FlashLoanArbitrageTest is Test {
         assertEq(usdc.allowance(address(arbitrage), address(uni)), 0);
     }
 
+    function testWarmApprovals() public {
+        address[] memory tokens = new address[](2);
+        tokens[0] = address(usdc);
+        tokens[1] = address(weth);
+
+        arbitrage.warmApprovals(tokens);
+
+        assertEq(usdc.allowance(address(arbitrage), address(uni)), type(uint256).max);
+        assertEq(usdc.allowance(address(arbitrage), address(sushi)), type(uint256).max);
+        assertEq(usdc.allowance(address(arbitrage), address(morpho)), type(uint256).max);
+        assertEq(weth.allowance(address(arbitrage), address(uni)), type(uint256).max);
+    }
+
+    function testWarmApprovalsOnlyOwner() public {
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(usdc);
+
+        vm.prank(user);
+        vm.expectRevert();
+        arbitrage.warmApprovals(tokens);
+    }
+
     function testExistingBalanceDoesNotMaskBadTrade() public {
         usdc.mint(address(arbitrage), 1000e6);
         uni.setMultiplier(100);
