@@ -1,73 +1,150 @@
-.PHONY: help build test test-unit test-fork deploy-base deploy-eth deploy-arbitrum deploy-local anvil verify-base clean run-monitor run-bot
+.PHONY: help build sizes lint test test-unit test-fork test-invariant test-formal test-real-dex \
+        deploy-base deploy-eth deploy-arbitrum deploy-local \
+        verify-base verify-eth verify-arbitrum \
+        anvil warm-approvals \
+        install run-monitor run-bot run-scan run-scan-dense \
+        clean
 
 -include .env
 export
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Toolchain — .exe suffixes on Windows
+# ──────────────────────────────────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
 FOUNDRY_BIN := $(subst \,/,$(USERPROFILE))/.foundry/bin
-ANVIL ?= $(FOUNDRY_BIN)/anvil.exe
+FORGE  ?= $(FOUNDRY_BIN)/forge.exe
+ANVIL  ?= $(FOUNDRY_BIN)/anvil.exe
+CAST   ?= $(FOUNDRY_BIN)/cast.exe
+HALMOS ?= halmos
 else
-ANVIL ?= anvil
+FORGE  ?= forge
+ANVIL  ?= anvil
+CAST   ?= cast
+HALMOS ?= halmos
 endif
 
 NODE ?= node
 
-DEPLOY_SCRIPT := script/FlashLoanDeploy.s.sol:DeployFlashLoanArb
+DEPLOY_SCRIPT       := script/FlashLoanDeploy.s.sol:DeployFlashLoanArb
 LOCAL_DEPLOY_SCRIPT := script/DeployLocal.s.sol:DeployFlashLoanArbLocal
 
+# Must match foundry.toml
+SOLC_VERSION := 0.8.28
+OPT_RUNS     := 10000
+
+# Base token addresses (for warm-approvals)
+WETH_BASE := 0x4200000000000000000000000000000000000006
+USDC_BASE := 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 help:
-	@echo Flash Loan Arbitrage Bot - Foundry Commands
-	@echo ----------------------------------------------------
-	@echo make build           - Build the contracts
-	@echo make test            - Run all tests
-	@echo make test-unit       - Run unit tests only
-	@echo make test-fork       - Run Base fork test only
-	@echo make deploy-base     - Deploy to Base mainnet
-	@echo make deploy-eth      - Deploy to Ethereum mainnet
-	@echo make deploy-arbitrum - Deploy to Arbitrum
-	@echo make deploy-local    - Deploy to local Anvil
-	@echo make verify-base     - Verify contract on BaseScan
-	@echo make clean           - Clean Foundry build artifacts
-	@echo make run-monitor     - Run price monitor
-	@echo make run-bot         - Run execution engine
-	@echo ----------------------------------------------------
+	@echo "Flash Loan Arbitrage Bot — available targets"
+	@echo "──────────────────────────────────────────────────────────────"
+	@echo " Build"
+	@echo "  make build              Compile contracts"
+	@echo "  make sizes              Compile and print bytecode sizes"
+	@echo "  make lint               Lint (runs with build)"
+	@echo "  make clean              Delete build artifacts"
+	@echo ""
+	@echo " Test"
+	@echo "  make test               Run all tests"
+	@echo "  make test-unit          Unit tests (mock env)"
+	@echo "  make test-fork          Fork test against live Base state"
+	@echo "  make test-invariant     Stateful fuzz / invariant suite"
+	@echo "  make test-formal        Halmos symbolic-execution tests"
+	@echo "  make test-real-dex      Fork test with real on-chain DEX contracts"
+	@echo ""
+	@echo " Deploy"
+	@echo "  make deploy-base        Deploy to Base mainnet"
+	@echo "  make deploy-eth         Deploy to Ethereum mainnet"
+	@echo "  make deploy-arbitrum    Deploy to Arbitrum"
+	@echo "  make deploy-local       Deploy to local Anvil (uses mock addresses)"
+	@echo ""
+	@echo " Verify"
+	@echo "  make verify-base        Verify on Basescan  (CONTRACT_BASE in .env)"
+	@echo "  make verify-eth         Verify on Etherscan (CONTRACT_ETH in .env)"
+	@echo "  make verify-arbitrum    Verify on Arbiscan  (CONTRACT_ARBITRUM in .env)"
+	@echo ""
+	@echo " Post-deploy"
+	@echo "  make warm-approvals     Pre-approve WETH+USDC for all routers on Base"
+	@echo ""
+	@echo " Run"
+	@echo "  make anvil              Anvil forked from Base mainnet"
+	@echo "  make install            npm install for off-chain scripts"
+	@echo "  make run-monitor        Start price monitor"
+	@echo "  make run-bot            Start execution engine"
+	@echo "  make run-scan           Sampled historical arb scan (Base)"
+	@echo "  make run-scan-dense     Dense every-block arb scan (Base)"
+	@echo "──────────────────────────────────────────────────────────────"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Build
+# ──────────────────────────────────────────────────────────────────────────────
 
 build:
-	forge build
+	$(FORGE) build
+
+sizes:
+	$(FORGE) build --sizes
+
+lint:
+	$(FORGE) build
+
+clean:
+	$(FORGE) clean
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test
+# ──────────────────────────────────────────────────────────────────────────────
 
 test:
-	forge test
+	$(FORGE) test -vv
 
 test-unit:
-	forge test --match-contract FlashLoanArbitrageTest -vvv
+	$(FORGE) test --match-contract FlashLoanArbitrageTest -vvv
 
 test-fork:
-	forge test --match-contract FlashLoanArbitrageForkTest -vv
+	$(FORGE) test --match-contract FlashLoanArbitrageForkTest -vv
 
-deploy-base: NETWORK=base
+test-invariant:
+	$(FORGE) test --match-contract FlashLoanArbitrageInvariantTest -vv
+
+# Halmos reads halmos.toml for solver_timeout and loop bounds
+test-formal:
+	$(HALMOS) --match-contract FlashLoanArbitrageFormalTest
+
+# Requires BASE_RPC_URL — replays against real Uniswap V3 / V2 state
+test-real-dex:
+	$(FORGE) test --match-contract FlashLoanArbitrageRealDexTest \
+		--fork-url $(BASE_RPC_URL) -vv
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Deploy
+# ──────────────────────────────────────────────────────────────────────────────
+
 deploy-base:
 	@echo "Deploying to Base mainnet..."
-	forge script $(DEPLOY_SCRIPT) \
+	NETWORK=base $(FORGE) script $(DEPLOY_SCRIPT) \
 		--rpc-url base \
 		--broadcast \
 		--verify \
 		--private-key $(PRIVATE_KEY) \
 		-vvv
 
-deploy-eth: NETWORK=ethereum
 deploy-eth:
 	@echo "Deploying to Ethereum mainnet..."
-	forge script $(DEPLOY_SCRIPT) \
+	NETWORK=ethereum $(FORGE) script $(DEPLOY_SCRIPT) \
 		--rpc-url ethereum \
 		--broadcast \
 		--verify \
 		--private-key $(PRIVATE_KEY) \
 		-vvv
 
-deploy-arbitrum: NETWORK=arbitrum
 deploy-arbitrum:
 	@echo "Deploying to Arbitrum..."
-	forge script $(DEPLOY_SCRIPT) \
+	NETWORK=arbitrum $(FORGE) script $(DEPLOY_SCRIPT) \
 		--rpc-url arbitrum \
 		--broadcast \
 		--verify \
@@ -75,29 +152,74 @@ deploy-arbitrum:
 		-vvv
 
 deploy-local:
-	@echo "Deploying locally..."
-	forge script $(LOCAL_DEPLOY_SCRIPT) \
+	@echo "Deploying to local Anvil (requires mocks at default addresses)..."
+	$(FORGE) script $(LOCAL_DEPLOY_SCRIPT) \
 		--rpc-url http://localhost:8545 \
 		--broadcast \
 		-vvv
 
-anvil:
-	$(ANVIL) --fork-url base
+# ──────────────────────────────────────────────────────────────────────────────
+# Verify  (compiler settings must match foundry.toml exactly)
+# ──────────────────────────────────────────────────────────────────────────────
 
 verify-base:
-	forge verify-contract \
-		--chain-id 8453 \
-		--num-of-optimizations 200 \
-		--compiler-version v0.8.23 \
-		$(CONTRACT_BASE) \
+	$(FORGE) verify-contract $(CONTRACT_BASE) \
 		src/FlashLoanArbitrage.sol:FlashLoanArbitrage \
-		$(BASESCAN_API_KEY)
+		--chain-id 8453 \
+		--compiler-version $(SOLC_VERSION) \
+		--num-of-optimizations $(OPT_RUNS) \
+		--etherscan-api-key $(BASESCAN_API_KEY)
 
-clean:
-	forge clean
+verify-eth:
+	$(FORGE) verify-contract $(CONTRACT_ETH) \
+		src/FlashLoanArbitrage.sol:FlashLoanArbitrage \
+		--chain-id 1 \
+		--compiler-version $(SOLC_VERSION) \
+		--num-of-optimizations $(OPT_RUNS) \
+		--etherscan-api-key $(ETHERSCAN_API_KEY)
+
+verify-arbitrum:
+	$(FORGE) verify-contract $(CONTRACT_ARBITRUM) \
+		src/FlashLoanArbitrage.sol:FlashLoanArbitrage \
+		--chain-id 42161 \
+		--compiler-version $(SOLC_VERSION) \
+		--num-of-optimizations $(OPT_RUNS) \
+		--etherscan-api-key $(ARBISCAN_API_KEY)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Post-deploy
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Call warmApprovals([WETH, USDC]) once after deploying to Base so the first
+# arb tx doesn't pay ~75k gas per token for cold ERC-20 approvals.
+warm-approvals:
+	$(CAST) send $(CONTRACT_BASE) \
+		"warmApprovals(address[])" "[$(WETH_BASE),$(USDC_BASE)]" \
+		--rpc-url $(BASE_RPC_URL) \
+		--private-key $(PRIVATE_KEY)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Local node
+# ──────────────────────────────────────────────────────────────────────────────
+
+anvil:
+	$(ANVIL) --fork-url $(BASE_RPC_URL)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Off-chain scripts
+# ──────────────────────────────────────────────────────────────────────────────
+
+install:
+	cd scripts && npm install
 
 run-monitor:
 	$(NODE) scripts/priceMonitor.js
 
 run-bot:
 	$(NODE) scripts/executionEngine.js
+
+run-scan:
+	$(NODE) scripts/scanArb.js
+
+run-scan-dense:
+	$(NODE) scripts/scanDense.js
