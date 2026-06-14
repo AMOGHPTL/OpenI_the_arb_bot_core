@@ -4,7 +4,8 @@ pragma solidity ^0.8.0;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IMorpho} from "./interfaces/IMorpho.sol";
 import {IMorphoFlashLoanCallback} from "./interfaces/IMorphoCallbacks.sol";
 
@@ -34,7 +35,11 @@ interface IUniV2Router {
     ) external returns (uint256[] memory amounts);
 }
 
-contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuard {
+// Ownable2Step: ownership transfer requires the new owner to accept, preventing
+// loss of the contract to a mistyped address.
+// ReentrancyGuardTransient: same guarantee as ReentrancyGuard but uses EIP-1153
+// transient storage (~4.9k gas cheaper per flash loan; requires Cancun, live on Base).
+contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable2Step, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     IMorpho public immutable MORPHO;
@@ -47,8 +52,8 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
     event ProfitWithdrawn(address indexed token, uint256 amount);
     event TokensRescued(address indexed token, uint256 amount);
     event ETHRescued(uint256 amount);
-    event FlashLoanInitiated(address indexed token, uint256 amount);
     event ApprovalRevoked(address indexed token, address indexed spender);
+    event ApprovalsWarmed(address indexed token);
 
     struct ArbitrageData {
         address tokenBorrowed;
@@ -203,7 +208,6 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
             })
         );
 
-        emit FlashLoanInitiated(token, amount);
         MORPHO.flashLoan(token, amount, data);
     }
 
@@ -337,6 +341,22 @@ contract FlashLoanArbitrage is IMorphoFlashLoanCallback, Ownable, ReentrancyGuar
         if (!s_isMaxApproved[token][spender]) {
             s_isMaxApproved[token][spender] = true;
             IERC20(token).forceApprove(spender, type(uint256).max);
+        }
+    }
+
+    /// @notice Pre-approves `tokens` for both routers and Morpho so the first
+    ///         arbitrage of a pair does not pay ~75k gas of cold approvals
+    ///         inside the profit-critical transaction. Call once per token
+    ///         after deployment (e.g. warmApprovals([USDC, WETH])).
+    function warmApprovals(address[] calldata tokens) external onlyOwner {
+        uint256 len = tokens.length;
+        for (uint256 i; i < len; ++i) {
+            address token = tokens[i];
+            if (token == address(0)) revert ZeroAddress();
+            _approveMaxIfNeeded(token, address(UNISWAP_ROUTER));
+            _approveMaxIfNeeded(token, address(SUSHI_ROUTER));
+            _approveMaxIfNeeded(token, address(MORPHO));
+            emit ApprovalsWarmed(token);
         }
     }
 
