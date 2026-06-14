@@ -24,7 +24,8 @@ CAST   ?= cast
 HALMOS ?= halmos
 endif
 
-NODE ?= node
+NODE    ?= node
+ACCOUNT ?= default
 
 DEPLOY_SCRIPT       := script/FlashLoanDeploy.s.sol:DeployFlashLoanArb
 LOCAL_DEPLOY_SCRIPT := script/DeployLocal.s.sol:DeployFlashLoanArbLocal
@@ -57,9 +58,9 @@ help:
 	@echo "  make test-real-dex      Fork test with real on-chain DEX contracts"
 	@echo ""
 	@echo " Deploy"
-	@echo "  make deploy-base        Deploy to Base mainnet"
-	@echo "  make deploy-eth         Deploy to Ethereum mainnet"
-	@echo "  make deploy-arbitrum    Deploy to Arbitrum"
+	@echo "  make deploy-base        Deploy to Base mainnet        (ACCOUNT=name)"
+	@echo "  make deploy-eth         Deploy to Ethereum mainnet   (ACCOUNT=name)"
+	@echo "  make deploy-arbitrum    Deploy to Arbitrum           (ACCOUNT=name)"
 	@echo "  make deploy-local       Deploy to local Anvil (uses mock addresses)"
 	@echo ""
 	@echo " Verify"
@@ -130,7 +131,7 @@ deploy-base:
 		--rpc-url base \
 		--broadcast \
 		--verify \
-		--private-key $(PRIVATE_KEY) \
+		--account $(ACCOUNT) \
 		-vvv
 
 deploy-eth:
@@ -139,7 +140,7 @@ deploy-eth:
 		--rpc-url ethereum \
 		--broadcast \
 		--verify \
-		--private-key $(PRIVATE_KEY) \
+		--account $(ACCOUNT) \
 		-vvv
 
 deploy-arbitrum:
@@ -148,7 +149,7 @@ deploy-arbitrum:
 		--rpc-url arbitrum \
 		--broadcast \
 		--verify \
-		--private-key $(PRIVATE_KEY) \
+		--account $(ACCOUNT) \
 		-vvv
 
 deploy-local:
@@ -196,7 +197,7 @@ warm-approvals:
 	$(CAST) send $(CONTRACT_BASE) \
 		"warmApprovals(address[])" "[$(WETH_BASE),$(USDC_BASE)]" \
 		--rpc-url $(BASE_RPC_URL) \
-		--private-key $(PRIVATE_KEY)
+		--account $(ACCOUNT)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Local node
