@@ -16,29 +16,27 @@ const CONFIG = {
     base: {
       rpc: process.env.BASE_RPC_URL || "https://mainnet.base.org",
       chainId: 8453,
-      morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa",
+      morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb", // Morpho Blue — matches deployed contract
       weth: "0x4200000000000000000000000000000000000006",
 
+      // These two venues mirror the deployed FlashLoanArbitrage contract exactly
+      // (UNISWAP_ROUTER = V3 SwapRouter02, SUSHI_ROUTER = the Uni V2 router below,
+      // see backend/deployments/base.json). The contract can ONLY arb V3 <-> V2, so
+      // the monitor must quote precisely these venues — Aerodrome/Slipstream were
+      // removed because the contract has no router for them.
       dexes: [
         {
           name: "uniswap_v3",
-          router: "0x2626664c2603336E57B271c5C0b26F421741e481",
+          router: "0x2626664c2603336E57B271c5C0b26F421741e481", // contract UNISWAP_ROUTER
           quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
           type: "v3",
           defaultFee: 500,
         },
         {
-          name: "aerodrome",
-          router: "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
-          factory: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
-          type: "aerodrome",
-          defaultFeePercent: 0.003,
-        },
-        {
-          name: "aerodrome_slipstream",
-          router: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
-          quoter: "0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0",
-          type: "slipstream",
+          name: "uniswap_v2",
+          router: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24", // contract SUSHI_ROUTER (Uni V2-compatible)
+          type: "v2",
+          defaultFee: 3000,
         },
       ],
 
@@ -96,7 +94,7 @@ const CONFIG = {
     ethereum: {
       rpc: process.env.ETH_RPC_URL || "https://eth.llamarpc.com",
       chainId: 1,
-      morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFFa",
+      morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb", // Morpho Blue (canonical, same address as Base)
       weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
 
       dexes: [
@@ -492,6 +490,82 @@ class PriceMonitor extends EventEmitter {
     };
   }
 
+  // ── Execution-data builder (what the deployed contract actually needs) ───────
+  //
+  // The contract is a fixed Uniswap V3 <-> Uniswap V2 machine. A price-level spread
+  // isn't enough to act on — we must know the exact loan size, per-leg outputs, and
+  // direction. This simulates BOTH directions of the round trip
+  // (borrow tokenIn -> tokenOut -> tokenIn) at the real loan amount, using the V3
+  // quoter and the V2 router's getAmountsOut, then picks the direction that returns
+  // the most borrowed token. Returns null if neither direction is on-chain profitable
+  // or the chain lacks both a V3 and a V2 venue.
+  //
+  //   direction 0 = leg1 on V3 (tokenIn->tokenOut), leg2 on V2 (tokenOut->tokenIn)
+  //   direction 1 = leg1 on V2 (tokenIn->tokenOut), leg2 on V3 (tokenOut->tokenIn)
+  async buildExecutionData(chainName, pair) {
+    const dexes = this.contracts[chainName] || {};
+    let v3, v2;
+    for (const name of Object.keys(dexes)) {
+      const t = dexes[name].config.type;
+      if (t === "v3" && (!v3 || name.startsWith("uniswap"))) v3 = dexes[name];
+      else if (t === "v2" && !v2) v2 = dexes[name];
+    }
+    if (!v3 || !v2) return null;
+
+    const loan = pair.amountIn;
+    const fee = pair.uniswapFee || v3.config.defaultFee;
+    const { tokenIn, tokenOut } = pair; // tokenIn = borrowed, tokenOut = intermediate
+
+    const quoteV3 = async (tIn, tOut, amt) => {
+      const r = await v3.contract.quoteExactInputSingle.staticCall({
+        tokenIn: tIn, tokenOut: tOut, amountIn: amt, fee, sqrtPriceLimitX96: 0n,
+      });
+      return r[0];
+    };
+    const quoteV2 = async (tIn, tOut, amt) => {
+      const a = await v2.contract.getAmountsOut(amt, [tIn, tOut]);
+      return a[a.length - 1];
+    };
+
+    // Leg 1 of each direction (both start by selling the borrowed token)
+    const [d0Leg1, d1Leg1] = await Promise.all([
+      quoteV3(tokenIn, tokenOut, loan).catch(() => null),
+      quoteV2(tokenIn, tokenOut, loan).catch(() => null),
+    ]);
+
+    // Leg 2 of each direction (round-trips back to the borrowed token)
+    const [d0Final, d1Final] = await Promise.all([
+      d0Leg1 ? quoteV2(tokenOut, tokenIn, d0Leg1).catch(() => null) : null,
+      d1Leg1 ? quoteV3(tokenOut, tokenIn, d1Leg1).catch(() => null) : null,
+    ]);
+
+    const candidates = [];
+    if (d0Leg1 && d0Final) candidates.push({ direction: 0, leg1: d0Leg1, final: d0Final, sellOn: "uniswap_v3", buyOn: "uniswap_v2" });
+    if (d1Leg1 && d1Final) candidates.push({ direction: 1, leg1: d1Leg1, final: d1Final, sellOn: "uniswap_v2", buyOn: "uniswap_v3" });
+    if (candidates.length === 0) return null;
+
+    // Pick the direction that returns the most of the borrowed token
+    const best = candidates.reduce((a, b) => (b.final > a.final ? b : a));
+    if (best.final <= loan) return null; // no on-chain profit at the real loan size
+
+    const borrowedPriceUSD = pair.decimalsIn === 6 ? 1 : (this._ethPriceUSD[chainName] ?? null);
+
+    return {
+      direction: { direction: best.direction, buyOn: best.buyOn, sellOn: best.sellOn },
+      borrowedPriceUSD,
+      raw: {
+        tokenIn,
+        tokenOut,
+        uniswapFee: fee,
+        decimalsIn: pair.decimalsIn,
+        decimalsOut: pair.decimalsOut,
+        loanAmount: loan.toString(),
+        expectedOutFirst: best.leg1.toString(),   // leg-1 output (intermediate-token units)
+        expectedOutSecond: best.final.toString(),  // round-trip output (borrowed-token units)
+      },
+    };
+  }
+
   async poll() {
     // ── Phase 1: refresh gas prices and fetch all quotes in parallel ─────────────
     //
@@ -584,12 +658,20 @@ class PriceMonitor extends EventEmitter {
         // Prevents flooding the execution engine when an opportunity persists across polls.
         const oppKey = `${bestOpportunity.chain}:${bestOpportunity.pair}:${bestOpportunity.buyDex}:${bestOpportunity.sellDex}`;
         if (Date.now() - (this._lastEmitted[oppKey] ?? 0) > CONFIG.oppCooldownMs) {
-          this._lastEmitted[oppKey] = Date.now();
-          if (this.opportunities.length >= CONFIG.maxOpportunitiesStored) {
-            this.opportunities.splice(0, Math.floor(CONFIG.maxOpportunitiesStored / 2));
+          // Build the exact V3<->V2 round-trip args the deployed contract needs.
+          // If neither direction is profitable at the real loan size, the price-level
+          // spread was an illusion (slippage/stale quotes) — don't emit something the
+          // contract would only revert on.
+          const execData = await this.buildExecutionData(chainName, pair);
+          if (execData) {
+            this._lastEmitted[oppKey] = Date.now();
+            const executable = { ...bestOpportunity, ...execData };
+            if (this.opportunities.length >= CONFIG.maxOpportunitiesStored) {
+              this.opportunities.splice(0, Math.floor(CONFIG.maxOpportunitiesStored / 2));
+            }
+            this.opportunities.push(executable);
+            this.emit("opportunity", executable);
           }
-          this.opportunities.push(bestOpportunity);
-          this.emit("opportunity", bestOpportunity);
         }
 
         outputLines.push(

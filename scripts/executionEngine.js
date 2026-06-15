@@ -78,7 +78,9 @@ const FLASH_LOAN_ABI = [
 
 // ─── EXECUTION CONFIG ──────────────────────────────────────────────────────────
 const EXEC_CONFIG = {
-  minProfitUSD: 10,
+  // Keep the execution gate in sync with the monitor's net-profit gate so the two
+  // halves don't silently disagree about what counts as an opportunity.
+  minProfitUSD: CONFIG.minNetProfitUSD,
   slippageBps: 50, // 0.5% slippage tolerance
   maxGasPriceGwei: {
     base: 0.1,
@@ -181,44 +183,30 @@ class ExecutionEngine {
     return true;
   }
 
-  calculateMinAmounts(opportunity) {
+  // Apply the engine's slippage tolerance to a BigInt-ish amount.
+  applySlippage(amount) {
     const slippageBps = BigInt(EXEC_CONFIG.slippageBps);
     const basisPoints = 10000n;
-
-    const applySlippage = (amount) =>
-      (BigInt(amount) * (basisPoints - slippageBps)) / basisPoints;
-
-    let minFirst, minSecond;
-
-    if (opportunity.direction.direction === 0) {
-      // Uni -> Sushi
-      minFirst = applySlippage(opportunity.raw.uniAmountOut).toString();
-      minSecond = applySlippage(opportunity.raw.sushiAmountOut).toString();
-    } else {
-      // Sushi -> Uni
-      minFirst = applySlippage(opportunity.raw.sushiAmountOut).toString();
-      minSecond = applySlippage(opportunity.raw.uniAmountOut).toString();
-    }
-
-    return { minFirst, minSecond };
+    return (BigInt(amount) * (basisPoints - slippageBps)) / basisPoints;
   }
 
-  // Compute minProfit in tokenBorrowed units directly from expected swap outputs,
-  // with slippage applied. Avoids any USD/price conversion entirely.
-  calculateMinProfit(opportunity, loanAmount) {
-    const slippageBps = BigInt(EXEC_CONFIG.slippageBps);
-    const basisPoints = 10000n;
+  // Per-leg minimum outputs the contract enforces. The monitor already simulated the
+  // exact round trip for the chosen direction: expectedOutFirst is the leg-1 output
+  // (intermediate token), expectedOutSecond is the round-trip output (borrowed token).
+  calculateMinAmounts(opportunity) {
+    return {
+      minFirst: this.applySlippage(opportunity.raw.expectedOutFirst).toString(),
+      minSecond: this.applySlippage(opportunity.raw.expectedOutSecond).toString(),
+    };
+  }
 
-    // The second swap always returns tokenBorrowed. For direction 0 (Uni→Sushi)
-    // the round-trip output is sushiAmountOut; for direction 1 (Sushi→Uni) it's uniAmountOut.
-    const finalAmount =
-      opportunity.direction.direction === 0
-        ? BigInt(opportunity.raw.sushiAmountOut)
-        : BigInt(opportunity.raw.uniAmountOut);
-
-    const expectedProfit = finalAmount - loanAmount;
-    if (expectedProfit <= 0n) return 0n;
-    return (expectedProfit * (basisPoints - slippageBps)) / basisPoints;
+  // minProfit in borrowed-token units: the simulated round-trip surplus, less slippage.
+  calculateMinProfit(opportunity) {
+    const final = BigInt(opportunity.raw.expectedOutSecond);
+    const loan = BigInt(opportunity.raw.loanAmount);
+    const surplus = final - loan;
+    if (surplus <= 0n) return 0n;
+    return this.applySlippage(surplus);
   }
 
   async execute(opportunity) {
@@ -241,10 +229,12 @@ class ExecutionEngine {
     try {
       const contract = this.contracts[chain];
       const provider = this.wallets[chain].provider;
-      const loanAmount = ethers.parseUnits("1", raw.decimalsIn ?? 18);
+      // Borrow exactly what the monitor simulated the round trip against, so the
+      // per-leg min-outs and minProfit it computed actually hold on-chain.
+      const loanAmount = BigInt(raw.loanAmount);
 
       const { minFirst, minSecond } = this.calculateMinAmounts(opportunity);
-      const minProfitWei = this.calculateMinProfit(opportunity, loanAmount);
+      const minProfitWei = this.calculateMinProfit(opportunity);
       const deadline = Math.floor(Date.now() / 1000) + 120;
 
       // On-chain MEV guards: cap gas price and restrict to a short block window
@@ -297,8 +287,8 @@ class ExecutionEngine {
           const profitTokens = Number(
             ethers.formatUnits(arbLog.args.profit, raw.decimalsIn ?? 18),
           );
-          const price = parseFloat(opportunity.uniPrice);
-          if (price > 0) profitUSD = profitTokens * price;
+          const price = opportunity.borrowedPriceUSD;
+          if (price && price > 0) profitUSD = profitTokens * price;
         }
         this.stats.totalProfitUSD += profitUSD;
 
@@ -308,7 +298,7 @@ class ExecutionEngine {
           `   💰 Total profit so far: $${this.stats.totalProfitUSD.toFixed(2)}\n`,
         );
 
-        await this.withdrawProfit(chain, raw.tokenIn);
+        await this.withdrawProfit(chain, raw.tokenIn, raw.decimalsIn ?? 18);
       } else {
         this.stats.failures++;
         console.log(`   ❌ TX REVERTED — ${tx.hash}\n`);
@@ -321,7 +311,7 @@ class ExecutionEngine {
     }
   }
 
-  async withdrawProfit(chain, token) {
+  async withdrawProfit(chain, token, decimals = 18) {
     try {
       const contract = this.contracts[chain];
       const balance = await contract.getBalance(token);
@@ -330,7 +320,7 @@ class ExecutionEngine {
         const tx = await contract.withdrawProfit(token);
         await tx.wait();
         console.log(
-          `   💸 Profit withdrawn: ${ethers.formatEther(balance)} tokens`,
+          `   💸 Profit withdrawn: ${ethers.formatUnits(balance, decimals)} tokens`,
         );
       }
     } catch (err) {
