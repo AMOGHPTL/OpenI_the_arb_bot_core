@@ -1,5 +1,13 @@
 # Flash Loan Arbitrage Bot
 
+![Flash Loan Arbitrage Bot](bot.png)
+
+## Deployed Contract
+
+| Chain | Address |
+|---|---|
+| Base (8453) | [`0xcc9c0Ceb031c72Fa75753Ac48e279523dAEf686A`](https://basescan.org/address/0xcc9c0Ceb031c72Fa75753Ac48e279523dAEf686A) |
+
 ## Overview
 
 This project detects and executes cross-DEX arbitrage opportunities using Morpho flash loans, with no upfront capital required. It is built around five pillars:
